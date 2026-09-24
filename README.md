@@ -55,6 +55,7 @@ Create a `.env` file based on `.env.example`:
 1. Go to the [Discord Developer Portal](https://discord.com/developers/applications).
 2. Create an Application, copy your **Client ID**, **Client Secret**, and **Public Key**.
 3. Under **Bot**, create a bot user and copy the **Bot Token**.
+   - Under **OAuth2 > Redirects**, add the placeholder `https://127.0.0.1`. Discord requires a redirect URI, and the Embedded App SDK handles the redirect inside the Activity.
 4. On the **General Information** page, set **Interactions Endpoint URL** to `https://<YOUR_APP_URL>/api/interactions`. The server must be running with `DISCORD_PUBLIC_KEY` set, because Discord verifies the endpoint when you save it.
 5. Under **Activities**:
    - Enable Activities (Settings), and select the platforms you want under **Supported Platforms**.

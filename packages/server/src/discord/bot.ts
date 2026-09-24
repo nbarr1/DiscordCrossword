@@ -33,6 +33,7 @@ export class DiscordBotClient {
             name: 'channel',
             description: 'Channel where daily leaderboards will be posted',
             type: 7, // CHANNEL
+            channel_types: [0, 5], // GUILD_TEXT, GUILD_ANNOUNCEMENT (channels the bot can post in)
             required: true,
           },
           {
@@ -92,7 +93,8 @@ export class DiscordBotClient {
           Authorization: `Bot ${this.botToken}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(payload),
+        // Messages embed user display names, so never let them trigger @everyone/role/user pings.
+        body: JSON.stringify({ allowed_mentions: { parse: [] }, ...payload }),
       });
 
       if (!res.ok) {

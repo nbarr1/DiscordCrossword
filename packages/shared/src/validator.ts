@@ -24,8 +24,8 @@ export interface ValidationResult {
  */
 export function validateGridTemplate(
   grid: boolean[][],
-  width = GAME_CONFIG.GRID_WIDTH,
-  height = GAME_CONFIG.GRID_HEIGHT
+  width: number = GAME_CONFIG.GRID_WIDTH,
+  height: number = GAME_CONFIG.GRID_HEIGHT
 ): ValidationResult {
   const errors: string[] = [];
 

@@ -25,6 +25,16 @@ async function main() {
         }
       }
 
+      // Saving replaces any row for the same date, which would orphan players' attempts on a live puzzle.
+      const live = await queryOne<{ id: string; status: string }>(
+        `SELECT id, status FROM puzzles WHERE date = ? AND status IN ('published', 'archived');`,
+        [dateStr]
+      );
+      if (live) {
+        console.error(`❌ Puzzle ${live.id} for ${dateStr} is already ${live.status}; refusing to replace it.`);
+        process.exit(1);
+      }
+
       console.log(`Generating puzzle for date ${dateStr}...`);
       const pipeline = new PuzzlePipeline();
       const puzzle = await pipeline.generatePuzzle(dateStr, { themePrompt });

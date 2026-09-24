@@ -9,6 +9,7 @@ import {
   GAME_CONFIG,
   LeaderboardEntry,
 } from '@crossword/shared';
+import crypto from 'crypto';
 import express, { Request, Response } from 'express';
 import { z } from 'zod';
 import { queryAll, queryOne, runQuery } from '../db/database.js';
@@ -16,7 +17,7 @@ import { exchangeDiscordCode } from '../discord/auth.js';
 import { defaultBotClient } from '../discord/bot.js';
 import { createFallbackPuzzle } from '../engine/fallbackPuzzles.js';
 import { PuzzlePipeline } from '../engine/pipeline.js';
-import { AuthenticatedRequest, requireAuth } from './middleware.js';
+import { asyncHandler, AuthenticatedRequest, requireAuth } from './middleware.js';
 import { rateLimitCheck, rateLimitReveal, rateLimitSubmit } from './rateLimit.js';
 
 export const apiRouter = express.Router();
@@ -38,9 +39,14 @@ const CheckWordSchema = z.object({
 });
 
 const RevealLetterSchema = z.object({
-  row: z.number().int().min(0).max(14),
-  col: z.number().int().min(0).max(14),
+  row: z.number().int().min(0),
+  col: z.number().int().min(0),
 });
+
+// Event IDs must be unique; Date.now() alone collides when two events land in the same millisecond.
+function newEventId(): string {
+  return `ev-${crypto.randomUUID()}`;
+}
 
 const SubmitGridSchema = z.object({
   gridState: z.array(z.array(z.string())),
@@ -49,7 +55,7 @@ const SubmitGridSchema = z.object({
 /**
  * POST /api/auth/token
  */
-apiRouter.post('/auth/token', async (req: Request, res: Response): Promise<void> => {
+apiRouter.post('/auth/token', asyncHandler(async (req: Request, res: Response): Promise<void> => {
   const parse = TokenExchangeSchema.safeParse(req.body);
   if (!parse.success) {
     res.status(400).json({ error: 'Invalid request body', details: parse.error.format() });
@@ -72,7 +78,7 @@ apiRouter.post('/auth/token', async (req: Request, res: Response): Promise<void>
     console.error('[API Auth] Error:', err);
     res.status(500).json({ error: err.message || 'Authentication failed' });
   }
-});
+}));
 
 /**
  * Helper to get or publish today's puzzle.
@@ -143,7 +149,7 @@ export async function getOrPublishTodayPuzzle(): Promise<FullPuzzleData> {
 /**
  * GET /api/puzzle/today
  */
-apiRouter.get('/puzzle/today', requireAuth, async (req: Request, res: Response): Promise<void> => {
+apiRouter.get('/puzzle/today', requireAuth, asyncHandler(async (req: Request, res: Response): Promise<void> => {
   const user = (req as AuthenticatedRequest).user;
   const puzzle = await getOrPublishTodayPuzzle();
 
@@ -166,7 +172,7 @@ apiRouter.get('/puzzle/today', requireAuth, async (req: Request, res: Response):
     const attemptId = `att-${user.userId}-${puzzle.id}-${Date.now().toString(36)}`;
     const startTime = new Date().toISOString();
     // Default empty grid
-    const emptyGrid = Array.from({ length: 15 }, () => Array(15).fill(''));
+    const emptyGrid = Array.from({ length: puzzle.height }, () => Array(puzzle.width).fill(''));
 
     await runQuery(
       `INSERT INTO attempts (
@@ -187,7 +193,7 @@ apiRouter.get('/puzzle/today', requireAuth, async (req: Request, res: Response):
     await runQuery(
       `INSERT INTO events (id, attempt_id, puzzle_id, user_id, guild_id, event_type, payload_json)
        VALUES (?, ?, ?, ?, ?, 'attempt_started', ?);`,
-      [`ev-${Date.now().toString(36)}`, attemptId, puzzle.id, user.userId, user.guildId, JSON.stringify({ startTime })]
+      [newEventId(), attemptId, puzzle.id, user.userId, user.guildId, JSON.stringify({ startTime })]
     );
 
     attempt = {
@@ -231,14 +237,15 @@ apiRouter.get('/puzzle/today', requireAuth, async (req: Request, res: Response):
   res.json({
     puzzle: clientPayload,
     attempt: attemptState,
-    solution: puzzle.solution,
+    // ANTI-CHEAT: the solution is only revealed once the player has finished or the puzzle has closed.
+    solution: isCompleted || puzzle.isClosed ? puzzle.solution : undefined,
   });
-});
+}));
 
 /**
  * POST /api/attempt/save
  */
-apiRouter.post('/attempt/save', requireAuth, async (req: Request, res: Response): Promise<void> => {
+apiRouter.post('/attempt/save', requireAuth, asyncHandler(async (req: Request, res: Response): Promise<void> => {
   const parse = SaveProgressSchema.safeParse(req.body);
   if (!parse.success) {
     res.status(400).json({ error: 'Invalid grid state format' });
@@ -255,7 +262,7 @@ apiRouter.post('/attempt/save', requireAuth, async (req: Request, res: Response)
   );
 
   res.json({ success: true });
-});
+}));
 
 /**
  * POST /api/attempt/check-word
@@ -264,7 +271,7 @@ apiRouter.post(
   '/attempt/check-word',
   requireAuth,
   rateLimitCheck,
-  async (req: Request, res: Response): Promise<void> => {
+  asyncHandler(async (req: Request, res: Response): Promise<void> => {
     const parse = CheckWordSchema.safeParse(req.body);
     if (!parse.success) {
       res.status(400).json({ error: 'Invalid check request', details: parse.error.format() });
@@ -340,7 +347,7 @@ apiRouter.post(
       `INSERT INTO events (id, attempt_id, puzzle_id, user_id, guild_id, event_type, payload_json)
        VALUES (?, ?, ?, ?, ?, 'check_word', ?);`,
       [
-        `ev-${Date.now().toString(36)}`,
+        newEventId(),
         attempt.id,
         puzzle.id,
         user.userId,
@@ -357,7 +364,7 @@ apiRouter.post(
       totalPenaltySeconds: newPenalty,
       isFirstTimeWrong: result.isFirstTimeWrong,
     });
-  }
+  })
 );
 
 /**
@@ -367,7 +374,7 @@ apiRouter.post(
   '/attempt/reveal-letter',
   requireAuth,
   rateLimitReveal,
-  async (req: Request, res: Response): Promise<void> => {
+  asyncHandler(async (req: Request, res: Response): Promise<void> => {
     const parse = RevealLetterSchema.safeParse(req.body);
     if (!parse.success) {
       res.status(400).json({ error: 'Invalid cell coordinate' });
@@ -391,22 +398,31 @@ apiRouter.post(
       return;
     }
 
+    if (row >= puzzle.height || col >= puzzle.width) {
+      res.status(400).json({ error: 'Invalid cell coordinate' });
+      return;
+    }
+
     if (puzzle.grid[row][col].isBlack) {
       res.status(400).json({ error: 'Cannot reveal black cell' });
       return;
     }
+
+    const lockedCells: { row: number; col: number }[] = JSON.parse(attempt.locked_cells_json || '[]');
+    if (lockedCells.some((c) => c.row === row && c.col === col)) {
+      // Already checked or revealed: don't charge the penalty twice (e.g. on a double click).
+      res.status(400).json({ error: 'This cell is already locked' });
+      return;
+    }
+    lockedCells.push({ row, col });
 
     const correctLetter = puzzle.solution[row][col];
     const penalty = GAME_CONFIG.REVEAL_LETTER_PENALTY_SECONDS;
     const newPenalty = attempt.penalty_seconds + penalty;
 
     const gridState: string[][] = JSON.parse(attempt.grid_state_json);
+    if (!gridState[row]) gridState[row] = [];
     gridState[row][col] = correctLetter;
-
-    const lockedCells: { row: number; col: number }[] = JSON.parse(attempt.locked_cells_json || '[]');
-    if (!lockedCells.some((c) => c.row === row && c.col === col)) {
-      lockedCells.push({ row, col });
-    }
 
     await runQuery(
       `UPDATE attempts SET
@@ -423,7 +439,7 @@ apiRouter.post(
       `INSERT INTO events (id, attempt_id, puzzle_id, user_id, guild_id, event_type, payload_json)
        VALUES (?, ?, ?, ?, ?, 'reveal_letter', ?);`,
       [
-        `ev-${Date.now().toString(36)}`,
+        newEventId(),
         attempt.id,
         puzzle.id,
         user.userId,
@@ -439,7 +455,7 @@ apiRouter.post(
       penaltyAdded: penalty,
       totalPenaltySeconds: newPenalty,
     });
-  }
+  })
 );
 
 /**
@@ -449,7 +465,7 @@ apiRouter.post(
   '/attempt/submit',
   requireAuth,
   rateLimitSubmit,
-  async (req: Request, res: Response): Promise<void> => {
+  asyncHandler(async (req: Request, res: Response): Promise<void> => {
     const parse = SubmitGridSchema.safeParse(req.body);
     if (!parse.success) {
       res.status(400).json({ error: 'Invalid submit grid data' });
@@ -477,6 +493,8 @@ apiRouter.post(
       const elapsed = calculateElapsedSeconds(attempt.start_time, attempt.finish_time);
       res.json({
         success: true,
+        penaltyAdded: 0,
+        totalPenaltySeconds: attempt.penalty_seconds,
         finishTime: attempt.finish_time,
         totalScoreSeconds: calculateTotalScore(elapsed, attempt.penalty_seconds),
         solution: puzzle.solution,
@@ -486,8 +504,8 @@ apiRouter.post(
 
     // Verify all white cells match the solution
     let isFullyCorrect = true;
-    for (let r = 0; r < 15; r++) {
-      for (let c = 0; c < 15; c++) {
+    for (let r = 0; r < puzzle.height; r++) {
+      for (let c = 0; c < puzzle.width; c++) {
         if (!puzzle.grid[r][c].isBlack) {
           const submittedChar = (clientGrid[r]?.[c] || '').toUpperCase();
           const expectedChar = puzzle.solution[r][c];
@@ -519,7 +537,7 @@ apiRouter.post(
         `INSERT INTO events (id, attempt_id, puzzle_id, user_id, guild_id, event_type, payload_json)
          VALUES (?, ?, ?, ?, ?, 'puzzle_solved', ?);`,
         [
-          `ev-${Date.now().toString(36)}`,
+          newEventId(),
           attempt.id,
           puzzle.id,
           user.userId,
@@ -563,7 +581,7 @@ apiRouter.post(
       `INSERT INTO events (id, attempt_id, puzzle_id, user_id, guild_id, event_type, payload_json)
        VALUES (?, ?, ?, ?, ?, 'submit_incorrect', ?);`,
       [
-        `ev-${Date.now().toString(36)}`,
+        newEventId(),
         attempt.id,
         puzzle.id,
         user.userId,
@@ -578,15 +596,16 @@ apiRouter.post(
       totalPenaltySeconds: newPenalty,
       message: 'Your grid contains errors. Keep hunting!',
     });
-  }
+  })
 );
 
 /**
  * GET /api/leaderboard
  */
-apiRouter.get('/leaderboard', requireAuth, async (req: Request, res: Response): Promise<void> => {
+apiRouter.get('/leaderboard', requireAuth, asyncHandler(async (req: Request, res: Response): Promise<void> => {
   const user = (req as AuthenticatedRequest).user;
-  const guildId = (req.query.guildId as string) || user.guildId;
+  // Only the guild verified at login; a client-supplied guildId would expose other servers' standings.
+  const guildId = user.guildId;
   const puzzle = await getOrPublishTodayPuzzle();
 
   if (!guildId) {
@@ -645,4 +664,4 @@ apiRouter.get('/leaderboard', requireAuth, async (req: Request, res: Response): 
     date: puzzle.date,
     leaderboard: entries,
   });
-});
+}));

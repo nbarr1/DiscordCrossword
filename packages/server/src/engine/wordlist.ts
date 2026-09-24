@@ -1,9 +1,12 @@
 /**
  * Crossword dictionary and word indexing.
  *
- * Licensed: Public Domain / SCOWL & Peter Broda open-source crossword wordlist.
- * Includes quality scoring (50-95) and offensive word blocklist filtering.
+ * Words and quality scores come from the Collaborative Word List by Crossword Nexus
+ * (MIT License), filtered to A-Z entries of 3-15 letters scoring 50 or more.
+ * See packages/server/data/WORDLIST_LICENSE.md. An offensive-word blocklist is applied on load.
  */
+
+import fs from 'fs';
 
 export interface ScoredWord {
   word: string;
@@ -31,529 +34,64 @@ export const OFFENSIVE_BLOCKLIST = new Set([
   'SHIT',
   'TWAT',
   'PUSSY',
+  'RETARDS',
+  'RETARDED',
 ]);
+
+// Roots that are offensive anywhere inside an entry, which matters for multi-word phrases
+// (e.g. "...SHIT..."). Ambiguous roots (DICK, COCK, SPIC, TWAT...) stay exact-match only,
+// since they appear inside ordinary words like DICKENS, PEACOCK, SPICE, and HOTWATER.
+const OFFENSIVE_ROOTS = /FUCK|SHIT|CUNT|NIGG|FAGGOT|WHORE|BITCH|ASSHOLE|SLUT|DILDO|JIZZ|COCKSUCK|KIKE/;
+
+export function isOffensive(word: string): boolean {
+  return OFFENSIVE_BLOCKLIST.has(word) || OFFENSIVE_ROOTS.test(word);
+}
 
 /**
  * Curated vocabulary across word lengths 3 through 15 with quality ratings (50-95).
  * Common, lively words are prioritized.
  */
-export const RAW_DICTIONARY: [string, number][] = [
-  // 3 letters
-  ['ACE', 90], ['ACT', 85], ['ADD', 80], ['AGE', 85], ['AID', 85], ['AIM', 85], ['AIR', 90],
-  ['ALE', 80], ['ALL', 90], ['AND', 85], ['ANT', 80], ['APE', 80], ['ARC', 85], ['ARM', 85],
-  ['ART', 90], ['ASH', 80], ['ASK', 85], ['AWE', 85], ['AXE', 80], ['BAD', 85], ['BAG', 85],
-  ['BAN', 80], ['BAR', 85], ['BAT', 85], ['BAY', 85], ['BED', 90], ['BEE', 85], ['BEG', 80],
-  ['BET', 85], ['BIG', 85], ['BIN', 80], ['BIT', 85], ['BOB', 80], ['BOG', 75], ['BOW', 80],
-  ['BOX', 85], ['BOY', 85], ['BUG', 85], ['BUS', 85], ['BUT', 85], ['BUY', 85], ['CAB', 85],
-  ['CAM', 80], ['CAN', 85], ['CAP', 85], ['CAR', 90], ['CAT', 90], ['COW', 85], ['CRY', 85],
-  ['CUP', 85], ['CUT', 85], ['DAY', 90], ['DEN', 80], ['DEW', 80], ['DIG', 85], ['DIM', 80],
-  ['DOG', 90], ['DOT', 85], ['DRY', 85], ['DUE', 85], ['EAR', 85], ['EAT', 90], ['EGG', 90],
-  ['ELF', 85], ['ELK', 80], ['ELM', 80], ['END', 85], ['ERA', 85], ['EVE', 85], ['EYE', 90],
-  ['FAN', 85], ['FAR', 85], ['FAT', 85], ['FED', 80], ['FEE', 85], ['FEW', 85], ['FIG', 80],
-  ['FIT', 85], ['FIX', 85], ['FLY', 90], ['FOG', 85], ['FOR', 85], ['FOX', 90], ['FUN', 90],
-  ['GAP', 85], ['GAS', 85], ['GEL', 85], ['GEM', 85], ['GET', 85], ['GIG', 85], ['GIN', 80],
-  ['GLU', 75], ['GOD', 85], ['GUM', 85], ['GUN', 80], ['GUT', 80], ['GUY', 85], ['GYM', 90],
-  ['HAD', 85], ['HAM', 85], ['HAT', 85], ['HAY', 80], ['HEN', 80], ['HEX', 80], ['HID', 80],
-  ['HIP', 85], ['HIT', 85], ['HOG', 80], ['HOP', 85], ['HOT', 85], ['HOW', 85], ['HUB', 85],
-  ['HUG', 85], ['HUM', 80], ['HUT', 85], ['ICE', 90], ['ICY', 85], ['ILL', 80], ['INK', 85],
-  ['INN', 85], ['ION', 85], ['IRE', 75], ['IVY', 85], ['JAM', 85], ['JAR', 85], ['JAW', 85],
-  ['JAY', 80], ['JET', 90], ['JIG', 80], ['JOB', 90], ['JOG', 85], ['JOY', 90], ['JUG', 80],
-  ['KEY', 90], ['KID', 85], ['KIN', 80], ['KIT', 85], ['LAB', 85], ['LAD', 80], ['LAP', 85],
-  ['LAW', 85], ['LAY', 85], ['LED', 85], ['LEG', 85], ['LEO', 80], ['LET', 85], ['LID', 85],
-  ['LIE', 85], ['LIP', 85], ['LIT', 85], ['LOG', 85], ['LOT', 85], ['LOW', 85], ['MAD', 85],
-  ['MAN', 85], ['MAP', 90], ['MAT', 85], ['MAY', 85], ['MEN', 85], ['MET', 85], ['MUD', 85],
-  ['MUG', 85], ['NAP', 85], ['NET', 85], ['NEW', 90], ['NOD', 80], ['NOT', 85], ['NOW', 85],
-  ['NUT', 85], ['OAK', 85], ['OAR', 85], ['OAT', 80], ['ODD', 85], ['OFF', 85], ['OIL', 85],
-  ['OLD', 85], ['ONE', 90], ['OPT', 85], ['ORB', 80], ['ORE', 85], ['OWL', 85], ['OWN', 85],
-  ['PAD', 85], ['PAN', 85], ['PAW', 85], ['PAY', 85], ['PEA', 85], ['PEN', 85], ['PET', 85],
-  ['PIE', 90], ['PIG', 85], ['PIN', 85], ['PIT', 85], ['PLY', 80], ['POD', 80], ['POP', 85],
-  ['POT', 85], ['PRO', 85], ['PUB', 85], ['PUN', 85], ['PUP', 85], ['RAG', 80], ['RAM', 80],
-  ['RAN', 85], ['RAP', 85], ['RAT', 85], ['RAW', 85], ['RAY', 85], ['RED', 90], ['RIB', 85],
-  ['RID', 80], ['RIG', 80], ['RIM', 80], ['RIP', 85], ['ROB', 80], ['ROD', 80], ['ROT', 80],
-  ['ROW', 85], ['RUB', 85], ['RUG', 85], ['RUN', 90], ['RUT', 75], ['RYE', 80], ['SAD', 85],
-  ['SAG', 80], ['SAP', 80], ['SAT', 85], ['SAW', 85], ['SAY', 85], ['SEA', 90], ['SEE', 90],
-  ['SET', 85], ['SEW', 85], ['SHY', 85], ['SIN', 80], ['SIP', 85], ['SIR', 85], ['SIT', 85],
-  ['SKI', 90], ['SKY', 90], ['SLY', 85], ['SOB', 80], ['SOD', 75], ['SON', 85], ['SOW', 80],
-  ['SOY', 85], ['SPA', 90], ['SPY', 90], ['SUM', 85], ['SUN', 90], ['TAB', 85], ['TAG', 85],
-  ['TAN', 85], ['TAP', 85], ['TAR', 80], ['TEA', 90], ['TEN', 85], ['THE', 85], ['TIE', 85],
-  ['TIN', 80], ['TIP', 85], ['TOE', 85], ['TON', 85], ['TOP', 85], ['TOW', 80], ['TOY', 90],
-  ['TRY', 90], ['TUB', 85], ['TUG', 80], ['TWO', 90], ['URN', 80], ['USE', 85], ['VAN', 85],
-  ['VET', 85], ['VIA', 85], ['VOW', 85], ['WAR', 85], ['WAX', 85], ['WAY', 85], ['WEB', 90],
-  ['WET', 85], ['WHO', 85], ['WIG', 80], ['WIN', 90], ['WOK', 80], ['WON', 85], ['WOO', 80],
-  ['YAK', 80], ['YAM', 80], ['YEA', 80], ['YES', 90], ['YET', 85], ['YEW', 75], ['ZIP', 85],
-  ['ZOO', 90],
+const WORD_LIST_PATH = new URL('../../data/xwordlist.txt', import.meta.url);
 
-  // 4 letters
-  ['ACRE', 85], ['AFAR', 80], ['AGED', 80], ['AIDE', 85], ['ALGA', 80], ['ALLY', 85], ['ALMS', 80],
-  ['ALSO', 85], ['AMEN', 85], ['AMID', 80], ['AMMO', 85], ['ANEW', 80], ['ANTE', 85], ['ANTI', 85],
-  ['APEX', 90], ['ARCH', 85], ['AREA', 90], ['ARMY', 85], ['ATOM', 85], ['AUNT', 85], ['AURA', 85],
-  ['AUTO', 85], ['AVID', 85], ['AWAY', 85], ['AXIS', 85], ['BABY', 90], ['BACK', 85], ['BAIL', 85],
-  ['BAKE', 85], ['BALD', 85], ['BALE', 80], ['BALL', 90], ['BAND', 85], ['BANK', 90], ['BARB', 80],
-  ['BARE', 85], ['BARK', 85], ['BARN', 85], ['BASE', 85], ['BASS', 85], ['BATH', 85], ['BEAK', 85],
-  ['BEAM', 85], ['BEAN', 85], ['BEAR', 90], ['BEAT', 85], ['BEEF', 85], ['BEEN', 85], ['BEER', 90],
-  ['BELL', 85], ['BELT', 85], ['BEND', 85], ['BENT', 85], ['BEST', 90], ['BETA', 85], ['BIKE', 90],
-  ['BILL', 85], ['BIND', 85], ['BIRD', 90], ['BITE', 85], ['BLOT', 80], ['BLOW', 85], ['BLUE', 90],
-  ['BLUR', 85], ['BOAT', 90], ['BOLD', 85], ['BOLT', 85], ['BOMB', 85], ['BOND', 85], ['BONE', 85],
-  ['BOOK', 90], ['BOOM', 85], ['BOOT', 85], ['BORE', 80], ['BORN', 85], ['BOSS', 85], ['BOTH', 85],
-  ['BOWL', 85], ['BRAG', 85], ['BRAN', 80], ['BRED', 80], ['BREW', 85], ['BRIM', 80], ['BULL', 85],
-  ['BUMP', 85], ['BURN', 85], ['BURY', 85], ['BUSH', 85], ['BUSY', 85], ['CAFE', 90], ['CAGE', 85],
-  ['CAKE', 90], ['CALF', 85], ['CALL', 90], ['CALM', 85], ['CAMP', 85], ['CANE', 85], ['CAPE', 85],
-  ['CARD', 90], ['CARE', 85], ['CART', 85], ['CASE', 85], ['CASH', 90], ['CAST', 85], ['CAVE', 85],
-  ['CELL', 85], ['CHAT', 90], ['CHEF', 90], ['CHIN', 85], ['CHIP', 85], ['CHOP', 85], ['CITY', 90],
-  ['CLAM', 85], ['CLAN', 80], ['CLAP', 85], ['CLAW', 85], ['CLAY', 85], ['CLIP', 85], ['CLOG', 80],
-  ['CLUB', 90], ['CLUE', 90], ['COAL', 85], ['COAT', 85], ['CODE', 90], ['COIN', 85], ['COLD', 85],
-  ['COLT', 80], ['COMB', 85], ['COME', 85], ['CONE', 85], ['COOK', 90], ['COOL', 90], ['COPE', 85],
-  ['CORD', 85], ['CORK', 85], ['CORN', 85], ['COST', 85], ['CRAB', 85], ['CRAM', 80], ['CREW', 85],
-  ['CROP', 85], ['CROW', 85], ['CURE', 85], ['CURL', 85], ['DAME', 80], ['DAMP', 85], ['DARE', 85],
-  ['DARK', 85], ['DART', 85], ['DASH', 85], ['DATE', 90], ['DAWN', 85], ['DEAD', 85], ['DEAF', 85],
-  ['DEAL', 85], ['DEAN', 85], ['DEAR', 85], ['DECK', 85], ['DEED', 80], ['DEEP', 85], ['DEER', 85],
-  ['DIAL', 85], ['DIET', 85], ['DINE', 85], ['DIRT', 85], ['DISC', 85], ['DISH', 85], ['DISK', 85],
-  ['DIVE', 85], ['DOCK', 85], ['DOLL', 85], ['DOME', 85], ['DOOR', 90], ['DOSE', 85], ['DOWN', 85],
-  ['DRAB', 80], ['DRAG', 85], ['DRAW', 85], ['DROP', 85], ['DRUM', 85], ['DUAL', 85], ['DUCK', 85],
-  ['DUET', 85], ['DULL', 80], ['DUMP', 85], ['DUNE', 85], ['DUSK', 85], ['DUST', 85], ['DUTY', 85],
-  ['EACH', 85], ['EARL', 80], ['EARN', 85], ['EASE', 85], ['EAST', 85], ['EASY', 90], ['ECHO', 90],
-  ['EDGE', 85], ['EDIT', 85], ['EMIT', 80], ['EPIC', 90], ['EQUAL', 85], ['EVEN', 85], ['EVER', 85],
-  ['EVIL', 85], ['EXAM', 90], ['EXIT', 90], ['FACE', 90], ['FACT', 85], ['FADE', 85], ['FAIL', 85],
-  ['FAIR', 85], ['FAKE', 85], ['FALL', 85], ['FAME', 85], ['FARM', 85], ['FAST', 90], ['FATE', 85],
-  ['FAWN', 80], ['FEAR', 85], ['FEED', 85], ['FEEL', 85], ['FEET', 85], ['FILL', 85], ['FILM', 90],
-  ['FIND', 85], ['FINE', 85], ['FIRE', 90], ['FIRM', 85], ['FISH', 90], ['FIST', 85], ['FLAG', 85],
-  ['FLAT', 85], ['FLEE', 80], ['FLEW', 80], ['FLIP', 85], ['FLOW', 85], ['FOAM', 85], ['FOIL', 85],
-  ['FOLD', 85], ['FOLK', 85], ['FOND', 85], ['FOOD', 90], ['FOOL', 85], ['FOOT', 85], ['FORD', 85],
-  ['FORK', 85], ['FORM', 85], ['FORT', 85], ['FOUL', 80], ['FOUR', 90], ['FREE', 90], ['FROG', 85],
-  ['FROM', 85], ['FUEL', 85], ['FULL', 85], ['FUSE', 85], ['GAIN', 85], ['GALE', 80], ['GAME', 90],
-  ['GANG', 85], ['GATE', 85], ['GAZE', 85], ['GEAR', 85], ['GENE', 85], ['GIFT', 90], ['GIRL', 90],
-  ['GIVE', 85], ['GLAD', 85], ['GLOW', 85], ['GLUE', 85], ['GOAL', 90], ['GOAT', 85], ['GOLD', 90],
-  ['GOLF', 90], ['GONE', 85], ['GOOD', 90], ['GOWN', 85], ['GRAB', 85], ['GRAY', 85], ['GREW', 85],
-  ['GRID', 90], ['GRIM', 80], ['GRIN', 85], ['GRIP', 85], ['GROW', 85], ['GULF', 85], ['GURU', 85],
-  ['HAIL', 85], ['HAIR', 85], ['HALF', 85], ['HALL', 85], ['HALT', 85], ['HAND', 90], ['HANG', 85],
-  ['HARD', 85], ['HARE', 80], ['HARM', 85], ['HARP', 85], ['HATE', 80], ['HAVE', 85], ['HAWK', 85],
-  ['HEAD', 90], ['HEAL', 85], ['HEAP', 80], ['HEAR', 85], ['HEAT', 85], ['HEEL', 85], ['HEIR', 85],
-  ['HELD', 85], ['HELP', 90], ['HERB', 85], ['HERD', 85], ['HERO', 90], ['HIDE', 85], ['HIGH', 85],
-  ['HIKE', 85], ['HILL', 85], ['HINT', 85], ['HIRE', 85], ['HISS', 75], ['HIVE', 85], ['HOLD', 85],
-  ['HOLE', 85], ['HOME', 90], ['HOOD', 85], ['HOOK', 85], ['HOPE', 85], ['HORN', 85], ['HOSE', 80],
-  ['HOST', 85], ['HOUR', 85], ['HOWL', 80], ['HUGE', 85], ['HULL', 80], ['HUNT', 85], ['HURT', 85],
-  ['ICON', 90], ['IDEA', 90], ['IDLE', 80], ['IDOL', 85], ['INCH', 85], ['INFO', 90], ['IRIS', 85],
-  ['IRON', 85], ['ISLE', 85], ['ITEM', 85], ['JADE', 85], ['JAIL', 85], ['JAZZ', 90], ['JEAN', 85],
-  ['JEEP', 85], ['JOIN', 85], ['JOKE', 90], ['JOLT', 80], ['JUDO', 85], ['JUMP', 90], ['JUNE', 85],
-  ['JURY', 85], ['JUST', 85], ['KEEN', 85], ['KEEP', 85], ['KELP', 80], ['KEPT', 85], ['KICK', 85],
-  ['KILN', 75], ['KIND', 85], ['KING', 90], ['KITE', 85], ['KNEE', 85], ['KNOT', 85], ['KNOW', 85],
-  ['LACE', 85], ['LACK', 85], ['LAKE', 90], ['LAMB', 85], ['LAMP', 85], ['LAND', 85], ['LANE', 85],
-  ['LARK', 80], ['LAST', 85], ['LATE', 85], ['LAVA', 85], ['LAWN', 85], ['LAZY', 85], ['LEAD', 85],
-  ['LEAF', 85], ['LEAK', 85], ['LEAN', 85], ['LEAP', 85], ['LEFT', 85], ['LEND', 85], ['LENS', 85],
-  ['LESS', 85], ['LIFT', 85], ['LIME', 85], ['LINE', 85], ['LINK', 85], ['LION', 90], ['LISP', 80],
-  ['LIST', 85], ['LIVE', 85], ['LOAD', 85], ['LOAF', 85], ['LOAN', 85], ['LOCK', 85], ['LOFT', 85],
-  ['LOGO', 90], ['LONE', 80], ['LONG', 85], ['LOOK', 85], ['LOOP', 85], ['LORD', 85], ['LOSE', 85],
-  ['LOSS', 85], ['LOST', 85], ['LOUD', 85], ['LOVE', 90], ['LUCK', 90], ['LUNG', 85], ['LUSH', 80],
-  ['MACE', 80], ['MADE', 85], ['MAID', 85], ['MAIL', 85], ['MAIN', 85], ['MAKE', 85], ['MALL', 85],
-  ['MANY', 85], ['MARK', 85], ['MASK', 85], ['MASS', 85], ['MAST', 80], ['MATE', 85], ['MATH', 90],
-  ['MAZE', 85], ['MEAL', 85], ['MEAN', 85], ['MEAT', 85], ['MEET', 85], ['MELT', 85], ['MEMO', 85],
-  ['MEND', 80], ['MENU', 90], ['MERE', 80], ['MESH', 80], ['MESS', 85], ['MILD', 85], ['MILE', 85],
-  ['MILK', 85], ['MILL', 85], ['MIND', 85], ['MINE', 85], ['MINT', 85], ['MISS', 85], ['MIST', 85],
-  ['MOCK', 85], ['MODE', 85], ['MOLE', 80], ['MOLT', 75], ['MONK', 85], ['MOOD', 85], ['MOON', 90],
-  ['MOOR', 80], ['MORE', 85], ['MOSS', 80], ['MOST', 85], ['MOTH', 85], ['MOVE', 85], ['MUCH', 85],
-  ['MULE', 80], ['MUSE', 85], ['MUST', 85], ['MUTE', 80], ['MYTH', 85], ['NAIL', 85], ['NAME', 85],
-  ['NAVY', 85], ['NEAR', 85], ['NEAT', 85], ['NECK', 85], ['NEED', 85], ['NEST', 85], ['NEWS', 90],
-  ['NEXT', 85], ['NICE', 85], ['NINE', 85], ['NOON', 85], ['NORM', 85], ['NOSE', 85], ['NOTE', 85],
-  ['NOVA', 85], ['NUMB', 80], ['OAKS', 80], ['OASIS', 85], ['OATH', 85], ['OBEY', 85], ['ODDS', 85],
-  ['OKRA', 80], ['OMEN', 85], ['ONCE', 85], ['ONLY', 85], ['ONTO', 85], ['OPAL', 85], ['OPEN', 90],
-  ['OPUS', 80], ['ORAL', 80], ['ORCA', 85], ['OVAL', 85], ['OVEN', 85], ['OVER', 85], ['PACE', 85],
-  ['PACK', 85], ['PAGE', 85], ['PAID', 85], ['PAIN', 85], ['PAIR', 85], ['PALE', 80], ['PALM', 85],
-  ['PANE', 80], ['PARK', 90], ['PART', 85], ['PASS', 85], ['PAST', 85], ['PATH', 85], ['PEAK', 85],
-  ['PEAR', 85], ['PEEK', 80], ['PEEL', 85], ['PEER', 85], ['PELT', 75], ['PERK', 85], ['PETS', 85],
-  ['PIER', 85], ['PILE', 85], ['PILL', 85], ['PINE', 85], ['PINK', 85], ['PINT', 85], ['PIPE', 85],
-  ['PLAN', 85], ['PLAY', 90], ['PLEA', 80], ['PLOT', 85], ['PLUG', 85], ['PLUM', 85], ['PLUS', 85],
-  ['POEM', 85], ['POET', 85], ['POLE', 85], ['POLL', 85], ['POND', 85], ['POOL', 85], ['POOR', 85],
-  ['PORK', 80], ['PORT', 85], ['POSE', 85], ['POST', 85], ['POUR', 85], ['PRAY', 85], ['PREP', 85],
-  ['PREY', 85], ['PUFF', 80], ['PULL', 85], ['PUMP', 85], ['PURE', 85], ['PUSH', 85], ['QUIZ', 90],
-  ['RACE', 85], ['RACK', 85], ['RAID', 85], ['RAIL', 85], ['RAIN', 90], ['RAMP', 85], ['RANK', 85],
-  ['RARE', 85], ['RATE', 85], ['RAVE', 85], ['READ', 85], ['REAL', 85], ['REAP', 80], ['REAR', 80],
-  ['REEF', 85], ['REEL', 80], ['RELY', 85], ['RENT', 85], ['REST', 85], ['RICE', 85], ['RICH', 85],
-  ['RIDE', 85], ['RING', 85], ['RIOT', 85], ['RIPE', 85], ['RISE', 85], ['RISK', 85], ['ROAD', 90],
-  ['ROAR', 85], ['ROBE', 85], ['ROCK', 90], ['ROLE', 85], ['ROLL', 85], ['ROOF', 85], ['ROOM', 85],
-  ['ROOT', 85], ['ROSE', 90], ['ROUT', 75], ['RUBY', 85], ['RUIN', 85], ['RULE', 85], ['RUSH', 85],
-  ['RUST', 85], ['SAFE', 85], ['SAGE', 85], ['SAIL', 85], ['SAKE', 80], ['SALE', 85], ['SALT', 85],
-  ['SAME', 85], ['SAND', 85], ['SASH', 80], ['SAVE', 85], ['SCAN', 90], ['SCAR', 85], ['SEAL', 85],
-  ['SEAM', 80], ['SEAT', 85], ['SEED', 85], ['SEEK', 85], ['SEEM', 85], ['SELF', 85], ['SEND', 85],
-  ['SHED', 85], ['SHIP', 85], ['SHOE', 85], ['SHOP', 85], ['SHOT', 85], ['SHOW', 85], ['SHUT', 85],
-  ['SICK', 85], ['SIDE', 85], ['SIGN', 85], ['SILK', 85], ['SILO', 80], ['SING', 85], ['SINK', 85],
-  ['SITE', 85], ['SIZE', 85], ['SKIN', 85], ['SLAM', 85], ['SLAP', 85], ['SLID', 80], ['SLIM', 85],
-  ['SLIP', 85], ['SLOT', 85], ['SLOW', 85], ['SNAP', 85], ['SNOW', 90], ['SOAK', 85], ['SOAP', 85],
-  ['SOAR', 85], ['SOCK', 85], ['SOFA', 85], ['SOFT', 85], ['SOIL', 85], ['SOLO', 85], ['SONG', 90],
-  ['SOON', 85], ['SORE', 80], ['SOUL', 85], ['SOUP', 85], ['SOUR', 85], ['SPAN', 85], ['SPIN', 85],
-  ['SPIT', 80], ['SPOT', 85], ['STAR', 90], ['STAY', 85], ['STEM', 85], ['STEP', 85], ['STEW', 85],
-  ['STOP', 85], ['SUCH', 85], ['SUIT', 85], ['SWAN', 85], ['SWAP', 85], ['SWIM', 90], ['TALE', 85],
-  ['TALK', 85], ['TALL', 85], ['TANK', 85], ['TAPE', 85], ['TASK', 85], ['TAXI', 90], ['TEAM', 90],
-  ['TEAR', 85], ['TELL', 85], ['TENT', 85], ['TERM', 85], ['TEST', 85], ['TEXT', 90], ['THAT', 85],
-  ['THEM', 85], ['THEN', 85], ['THEY', 85], ['THIN', 85], ['THIS', 85], ['TIDE', 85], ['TIDY', 85],
-  ['TIED', 80], ['TIME', 90], ['TINY', 85], ['TOAD', 85], ['TOLL', 80], ['TONE', 85], ['TOOK', 85],
-  ['TOOL', 85], ['TOUR', 85], ['TOWN', 85], ['TRAM', 80], ['TRAP', 85], ['TRAY', 85], ['TREE', 90],
-  ['TRIP', 85], ['TRUE', 85], ['TUBE', 85], ['TUCK', 80], ['TUNA', 85], ['TUNE', 85], ['TURN', 85],
-  ['TWIN', 85], ['TYPE', 85], ['UNIT', 85], ['UPON', 85], ['URGE', 80], ['USED', 85], ['USER', 90],
-  ['VAIN', 80], ['VALE', 75], ['VARY', 85], ['VAST', 85], ['VEIL', 80], ['VEIN', 85], ['VENT', 85],
-  ['VERB', 85], ['VERY', 85], ['VEST', 85], ['VETO', 85], ['VIEW', 85], ['VINE', 85], ['VIOL', 75],
-  ['VOLT', 85], ['VOTE', 85], ['WADE', 80], ['WAGE', 85], ['WAIT', 85], ['WAKE', 85], ['WALK', 85],
-  ['WALL', 85], ['WAND', 85], ['WANT', 85], ['WARD', 80], ['WARM', 85], ['WARN', 85], ['WASH', 85],
-  ['WASP', 85], ['WAVE', 85], ['WEAK', 85], ['WEAR', 85], ['WEED', 80], ['WEEK', 85], ['WELL', 85],
-  ['WENT', 85], ['WEST', 85], ['WIDE', 85], ['WIFE', 85], ['WILD', 85], ['WILL', 85], ['WIND', 85],
-  ['WINE', 85], ['WING', 85], ['WIPE', 85], ['WIRE', 85], ['WISE', 85], ['WISH', 85], ['WITH', 85],
-  ['WOLF', 85], ['WOOD', 85], ['WOOL', 85], ['WORD', 90], ['WORK', 90], ['WORM', 85], ['WRAP', 85],
-  ['YARD', 85], ['YARN', 85], ['YEAR', 85], ['YOGA', 90], ['YOKE', 75], ['ZERO', 90], ['ZONE', 85],
+/**
+ * Reads a `WORD;score` file, one entry per line.
+ */
+export function loadWordListFile(filePath: string | URL = WORD_LIST_PATH): [string, number][] {
+  const entries: [string, number][] = [];
+  for (const line of fs.readFileSync(filePath, 'utf8').split('\n')) {
+    const sep = line.indexOf(';');
+    if (sep <= 0) continue;
+    const score = Number(line.slice(sep + 1));
+    if (Number.isFinite(score)) {
+      entries.push([line.slice(0, sep), score]);
+    }
+  }
+  return entries;
+}
 
-  // 5 letters
-  ['ABOUT', 90], ['ABOVE', 90], ['ACTOR', 90], ['ADAPT', 85], ['ADMIT', 85], ['ADOPT', 85], ['ADULT', 90],
-  ['AFTER', 90], ['AGAIN', 90], ['AGENT', 90], ['AGREE', 85], ['AHEAD', 85], ['ALARM', 85], ['ALBUM', 90],
-  ['ALERT', 85], ['ALIEN', 90], ['ALIKE', 85], ['ALIVE', 85], ['ALLOW', 85], ['ALONE', 85], ['ALONG', 85],
-  ['ALTER', 85], ['AMONG', 85], ['ANGEL', 90], ['ANGER', 85], ['ANGLE', 85], ['ANGRY', 85], ['APART', 85],
-  ['APPLE', 90], ['APPLY', 85], ['ARENA', 90], ['ARGUE', 85], ['ARISE', 80], ['ARRAY', 90], ['ARROW', 85],
-  ['ASIDE', 85], ['ASSET', 85], ['AUDIO', 90], ['AUDIT', 85], ['AVOID', 85], ['AWAIT', 85], ['AWAKE', 85],
-  ['AWARD', 90], ['AWARE', 85], ['BADGE', 85], ['BAKER', 85], ['BASIC', 85], ['BASIN', 80], ['BEACH', 90],
-  ['BEGIN', 85], ['BEING', 85], ['BELOW', 85], ['BENCH', 85], ['BERRY', 85], ['BIRTH', 85], ['BLACK', 90],
-  ['BLADE', 85], ['BLAME', 85], ['BLANK', 85], ['BLAST', 85], ['BLEND', 85], ['BLESS', 85], ['BLIND', 85],
-  ['BLOCK', 85], ['BLOOD', 85], ['BLOOM', 85], ['BOARD', 90], ['BOOST', 85], ['BOOTH', 80], ['BOUND', 85],
-  ['BRAIN', 90], ['BRAKE', 85], ['BRAND', 90], ['BREAD', 90], ['BREAK', 90], ['BRICK', 85], ['BRIDE', 85],
-  ['BRIEF', 85], ['BRING', 85], ['BROAD', 85], ['BROWN', 85], ['BRUSH', 85], ['BUILD', 90], ['BUNCH', 85],
-  ['CABIN', 85], ['CABLE', 85], ['CAMEL', 85], ['CANDY', 90], ['CANOE', 85], ['CARGO', 85], ['CARRY', 85],
-  ['CATCH', 85], ['CAUSE', 85], ['CEDAR', 80], ['CHAIN', 85], ['CHAIR', 90], ['CHALK', 85], ['CHAMP', 90],
-  ['CHANT', 85], ['CHAOS', 85], ['CHARM', 85], ['CHART', 85], ['CHASE', 85], ['CHEAP', 85], ['CHECK', 85],
-  ['CHEEK', 85], ['CHEER', 85], ['CHESS', 90], ['CHEST', 85], ['CHIEF', 85], ['CHILD', 90], ['CHILL', 85],
-  ['CHOIR', 85], ['CHORD', 85], ['CHOSE', 85], ['CHUNK', 85], ['CIDER', 85], ['CIGAR', 80], ['CIVIC', 85],
-  ['CIVIL', 85], ['CLAIM', 85], ['CLASS', 90], ['CLEAN', 85], ['CLEAR', 85], ['CLERK', 85], ['CLICK', 90],
-  ['CLIFF', 85], ['CLIMB', 85], ['CLOAK', 85], ['CLOCK', 90], ['CLOSE', 85], ['CLOTH', 85], ['CLOUD', 90],
-  ['CLOWN', 85], ['COACH', 85], ['COAST', 85], ['COLIN', 80], ['COLOR', 90], ['COMET', 85], ['CORAL', 85],
-  ['COUNT', 85], ['COURT', 85], ['COVER', 85], ['CRACK', 85], ['CRAFT', 85], ['CRANE', 85], ['CRASH', 85],
-  ['CRATE', 85], ['CRAWL', 85], ['CRAZY', 85], ['CREAM', 90], ['CREEK', 85], ['CREPT', 80], ['CRIME', 85],
-  ['CRISP', 85], ['CROSS', 90], ['CROWD', 85], ['CROWN', 90], ['CRUEL', 80], ['CRUSH', 85], ['CRUST', 85],
-  ['CUBIC', 85], ['CURVE', 85], ['CYCLE', 85], ['DAILY', 90], ['DANCE', 90], ['DEATH', 85], ['DEBIT', 85],
-  ['DEBUT', 85], ['DECAY', 80], ['DECOR', 85], ['DELAY', 85], ['DELTA', 85], ['DENSE', 85], ['DEPOT', 80],
-  ['DEPTH', 85], ['DERBY', 80], ['DIARY', 85], ['DIGIT', 85], ['DINER', 85], ['DISCO', 90], ['DITCH', 80],
-  ['DIVER', 85], ['DIZZY', 85], ['DODGE', 85], ['DONOR', 85], ['DOUBT', 85], ['DRAFT', 85], ['DRAIN', 85],
-  ['DRAKE', 80], ['DRAMA', 85], ['DREAM', 90], ['DRESS', 85], ['DRIFT', 85], ['DRILL', 85], ['DRINK', 90],
-  ['DRIVE', 90], ['DRONE', 90], ['DROWN', 80], ['DRYAD', 70], ['DUCHY', 75], ['DUMMY', 80], ['EAGER', 85],
-  ['EAGLE', 85], ['EARLY', 85], ['EARTH', 90], ['EASEL', 85], ['EIGHT', 90], ['ELDER', 85], ['ELECT', 85],
-  ['ELITE', 85], ['EMAIL', 90], ['EMBER', 80], ['EMPTY', 85], ['ENACT', 80], ['ENEMY', 85], ['ENJOY', 85],
-  ['ENTER', 85], ['ENTRY', 85], ['EQUAL', 85], ['EQUIP', 85], ['ERASE', 85], ['ERROR', 85], ['ESSAY', 85],
-  ['EVENT', 90], ['EVERY', 85], ['EXACT', 85], ['EXCEL', 85], ['EXERT', 80], ['EXIST', 85], ['EXTRA', 90],
-  ['FAINT', 85], ['FAITH', 85], ['FALSE', 85], ['FANCY', 85], ['FATAL', 85], ['FAULT', 85], ['FAVOR', 85],
-  ['FEAST', 85], ['FENCE', 85], ['FERRY', 85], ['FEVER', 85], ['FIBER', 85], ['FIELD', 85], ['FIFTH', 85],
-  ['FIFTY', 85], ['FIGHT', 85], ['FINAL', 90], ['FINCH', 80], ['FIRST', 90], ['FLAME', 85], ['FLASH', 85],
-  ['FLEET', 85], ['FLESH', 80], ['FLOAT', 85], ['FLOCK', 85], ['FLOOD', 85], ['FLOOR', 85], ['FLOUR', 85],
-  ['FLUID', 85], ['FLUTE', 85], ['FOCUS', 90], ['FORCE', 85], ['FORGE', 85], ['FORTH', 80], ['FORTY', 85],
-  ['FOUND', 85], ['FRAME', 90], ['FRANK', 85], ['FRAUD', 85], ['FRESH', 85], ['FRONT', 85], ['FROST', 85],
-  ['FRUIT', 90], ['FUNNY', 85], ['GHOST', 90], ['GIANT', 90], ['GIVEN', 85], ['GLASS', 85], ['GLOBE', 90],
-  ['GLORY', 85], ['GLOVE', 85], ['GRACE', 85], ['GRADE', 85], ['GRAIN', 85], ['GRAND', 85], ['GRANT', 85],
-  ['GRAPE', 85], ['GRAPH', 85], ['GRASP', 85], ['GRASS', 85], ['GRAVE', 80], ['GREAT', 90], ['GREEK', 85],
-  ['GREEN', 90], ['GREET', 85], ['GRIEF', 80], ['GRILL', 85], ['GROVE', 85], ['GUARD', 85], ['GUESS', 85],
-  ['GUEST', 85], ['GUIDE', 85], ['HABIT', 85], ['HAPPY', 90], ['HARSH', 80], ['HASTE', 80], ['HATCH', 85],
-  ['HAVEN', 85], ['HEART', 90], ['HEAVY', 85], ['HELLO', 90], ['HONEY', 90], ['HONOR', 85], ['HORSE', 90],
-  ['HOTEL', 90], ['HOUSE', 90], ['HUMAN', 90], ['HUMOR', 85], ['HURRY', 85], ['IDEAL', 85], ['IMAGE', 90],
-  ['INDEX', 90], ['INNER', 85], ['INPUT', 90], ['ISSUE', 85], ['JEWEL', 85], ['JUDGE', 85], ['JUICE', 85],
-  ['KNIFE', 85], ['KNOCK', 85], ['KNOWLEDGE', 85], ['LABEL', 85], ['LABOR', 85], ['LARGE', 85], ['LASER', 90],
-  ['LATER', 85], ['LAUGH', 85], ['LAYER', 85], ['LEARN', 90], ['LEASE', 85], ['LEAST', 85], ['LEAVE', 85],
-  ['LEGAL', 85], ['LEMON', 85], ['LEVEL', 85], ['LEVER', 85], ['LIGHT', 90], ['LIMIT', 85], ['LINEN', 85],
-  ['LIVER', 80], ['LOBBY', 85], ['LOCAL', 85], ['LODGE', 85], ['LOGIC', 90], ['LOVER', 85], ['LOWER', 85],
-  ['LOYAL', 85], ['LUCKY', 90], ['LUNCH', 90], ['MAGIC', 90], ['MAJOR', 85], ['MAKER', 85], ['MANOR', 80],
-  ['MAPLE', 85], ['MARCH', 85], ['MATCH', 85], ['MAYOR', 85], ['MEDAL', 85], ['MEDIA', 90], ['MELON', 85],
-  ['MERCY', 85], ['MERIT', 85], ['METAL', 85], ['METER', 85], ['MIDST', 80], ['MIGHT', 85], ['MINER', 85],
-  ['MINOR', 85], ['MODEL', 90], ['MONEY', 90], ['MONTH', 85], ['MORAL', 85], ['MOTOR', 85], ['MOUNT', 85],
-  ['MOUSE', 90], ['MOUTH', 85], ['MOVIE', 90], ['MUSIC', 90], ['NAIVE', 85], ['NERVE', 85], ['NIGHT', 90],
-  ['NOBLE', 85], ['NOISE', 85], ['NORTH', 90], ['NOVEL', 90], ['NURSE', 85], ['OCEAN', 90], ['OFFER', 85],
-  ['OFTEN', 85], ['ONION', 85], ['OPERA', 85], ['ORBIT', 90], ['ORDER', 85], ['ORGAN', 85], ['OTHER', 85],
-  ['OUGHT', 80], ['OUTER', 85], ['OWNER', 85], ['PAINT', 90], ['PANEL', 85], ['PANIC', 85], ['PAPER', 90],
-  ['PARTY', 90], ['PASTA', 90], ['PATCH', 85], ['PAUSE', 85], ['PEACE', 90], ['PEACH', 85], ['PEDAL', 85],
-  ['PHASE', 85], ['PHONE', 90], ['PHOTO', 90], ['PIANO', 90], ['PILOT', 90], ['PITCH', 85], ['PIZZA', 95],
-  ['PLACE', 90], ['PLAIN', 85], ['PLANE', 85], ['PLANT', 85], ['PLATE', 85], ['PLAZA', 90], ['POINT', 85],
-  ['POKER', 85], ['POLAR', 85], ['POWER', 90], ['PRESS', 85], ['PRICE', 85], ['PRIDE', 85], ['PRIME', 85],
-  ['PRINT', 85], ['PRIOR', 85], ['PRIZE', 90], ['PROOF', 85], ['PROUD', 85], ['PROVE', 85], ['PULSE', 85],
-  ['PUPIL', 85], ['QUEEN', 90], ['QUERY', 90], ['QUEST', 90], ['QUICK', 90], ['QUIET', 85], ['RADAR', 85],
-  ['RADIO', 90], ['RANCH', 85], ['RANGE', 85], ['RAPID', 85], ['RATIO', 85], ['REACH', 85], ['REACT', 85],
-  ['READY', 85], ['REALM', 85], ['REBEL', 85], ['REFER', 85], ['RELAX', 90], ['RELIC', 80], ['REPLY', 85],
-  ['RESET', 85], ['RESIN', 80], ['RIDER', 85], ['RIDGE', 85], ['RIGHT', 90], ['RIGID', 80], ['RIVAL', 85],
-  ['RIVER', 90], ['ROBOT', 95], ['ROUND', 85], ['ROUTE', 85], ['ROYAL', 85], ['RULER', 85], ['RURAL', 85],
-  ['SALAD', 85], ['SAUCE', 85], ['SCALE', 85], ['SCENE', 85], ['SCENT', 85], ['SCOPE', 85], ['SCORE', 85],
-  ['SCOUT', 85], ['SEIZE', 80], ['SENSE', 85], ['SERVE', 85], ['SHADE', 85], ['SHAKE', 85], ['SHALL', 85],
-  ['SHAME', 80], ['SHAPE', 85], ['SHARE', 85], ['SHARK', 85], ['SHARP', 85], ['SHEEP', 85], ['SHEET', 85],
-  ['SHELF', 85], ['SHELL', 85], ['SHIFT', 85], ['SHINE', 85], ['SHIRT', 85], ['SHOCK', 85], ['SHORE', 85],
-  ['SHORT', 85], ['SHOUT', 85], ['SIGHT', 85], ['SKILL', 85], ['SLATE', 85], ['SLEEP', 85], ['SLICE', 85],
-  ['SLOPE', 85], ['SMART', 90], ['SMILE', 90], ['SMOKE', 85], ['SNAKE', 85], ['SOLAR', 85], ['SOLID', 85],
-  ['SOLVE', 90], ['SOUND', 85], ['SOUTH', 90], ['SPACE', 90], ['SPARE', 85], ['SPARK', 85], ['SPEAK', 85],
-  ['SPEED', 85], ['SPELL', 85], ['SPEND', 85], ['SPICE', 85], ['SPILL', 85], ['SPOKE', 85], ['SPORT', 90],
-  ['STAGE', 85], ['STAIN', 85], ['STAIR', 85], ['STAKE', 85], ['STAND', 85], ['STARE', 85], ['START', 90],
-  ['STATE', 85], ['STEAM', 85], ['STEEL', 85], ['STICK', 85], ['STILL', 85], ['STOCK', 85], ['STONE', 85],
-  ['STORE', 85], ['STORM', 85], ['STORY', 90], ['STRAP', 85], ['STRAW', 85], ['SUGAR', 85], ['SUITE', 85],
-  ['SUPER', 90], ['SWEET', 85], ['TABLE', 90], ['TASTE', 85], ['TEACH', 85], ['TEMPO', 85], ['TIGER', 90],
-  ['TITLE', 85], ['TODAY', 90], ['TOKEN', 90], ['TOOTH', 85], ['TOPIC', 85], ['TOTAL', 85], ['TOUCH', 85],
-  ['TOWER', 85], ['TRACK', 85], ['TRADE', 85], ['TRAIL', 85], ['TRAIN', 90], ['TREAT', 85], ['TREND', 90],
-  ['TRIAL', 85], ['TRIBE', 85], ['TRICK', 85], ['TRUCK', 85], ['TRULY', 85], ['TRUST', 85], ['TRUTH', 85],
-  ['UNCLE', 85], ['UNDER', 85], ['UNION', 85], ['UNITY', 85], ['UNTIL', 85], ['UPPER', 85], ['URBAN', 85],
-  ['USAGE', 85], ['VALID', 90], ['VALUE', 85], ['VAPOR', 80], ['VAULT', 85], ['VIDEO', 95], ['VIRAL', 90],
-  ['VIRUS', 85], ['VISIT', 85], ['VITAL', 85], ['VOICE', 85], ['WAGON', 85], ['WASTE', 85], ['WATCH', 85],
-  ['WATER', 90], ['WEARY', 80], ['WHEAT', 85], ['WHEEL', 85], ['WHERE', 85], ['WHICH', 85], ['WHILE', 85],
-  ['WHITE', 90], ['WHOLE', 85], ['WOMAN', 90], ['WORLD', 95], ['WORRY', 85], ['WORTH', 85], ['WOULD', 85],
-  ['WOUND', 85], ['WRIST', 85], ['WRITE', 85], ['WRONG', 85], ['YACHT', 85], ['YIELD', 85], ['YOUNG', 85],
-  ['YOUTH', 85], ['ZEBRA', 85],
-
-  // 6 letters
-  ['ACCEPT', 85], ['ACCESS', 90], ['ACTION', 90], ['ACTIVE', 85], ['ACTUAL', 85], ['ADVICE', 85],
-  ['AFRAID', 85], ['AGENCY', 85], ['AGENDA', 85], ['AGREED', 85], ['ALMOST', 85], ['ALWAYS', 85],
-  ['AMOUNT', 85], ['ANIMAL', 90], ['ANNUAL', 85], ['ANSWER', 90], ['ANYONE', 85], ['APPEAL', 85],
-  ['APPEAR', 85], ['AROUND', 85], ['ARREST', 85], ['ARRIVE', 85], ['ARTIST', 90], ['ASPECT', 85],
-  ['ATTACK', 85], ['AUTHOR', 90], ['AVENUE', 85], ['BACKED', 80], ['BALLET', 85], ['BANNER', 85],
-  ['BARREL', 85], ['BASKET', 85], ['BATTLE', 85], ['BEAUTY', 90], ['BECOME', 85], ['BEFORE', 85],
-  ['BEHIND', 85], ['BELIEF', 85], ['BELONG', 85], ['BEYOND', 85], ['BISHOP', 85], ['BITTER', 80],
-  ['BORDER', 85], ['BORROW', 85], ['BOTTLE', 85], ['BOTTOM', 85], ['BOUNCE', 85], ['BRANCH', 85],
-  ['BREEZE', 85], ['BRIDGE', 90], ['BRIGHT', 85], ['BROKEN', 85], ['BUDGET', 85], ['BUFFER', 90],
-  ['BURDEN', 80], ['BUREAU', 85], ['BUTTON', 85], ['CAMERA', 90], ['CAMPUS', 85], ['CANCEL', 85],
-  ['CANDLE', 85], ['CANYON', 85], ['CARBON', 85], ['CAREER', 85], ['CARPET', 85], ['CASTLE', 90],
-  ['CASUAL', 85], ['CAUGHT', 85], ['CEMENT', 80], ['CENTER', 90], ['CHANCE', 85], ['CHANGE', 90],
-  ['CHARGE', 85], ['CHOICE', 85], ['CHOOSE', 85], ['CHURCH', 85], ['CIRCLE', 90], ['CIRCUS', 85],
-  ['CITIZEN', 85], ['CLIENT', 90], ['CLINIC', 85], ['CLOSED', 85], ['CLOSET', 85], ['COFFEE', 95],
-  ['COLLEGE', 85], ['COLUMN', 85], ['COMBAT', 85], ['COMEDY', 85], ['COMMON', 85], ['COMPLY', 80],
-  ['COPPER', 85], ['CORNER', 85], ['COSTLY', 80], ['COUNTY', 85], ['COUPLE', 85], ['COURSE', 85],
-  ['COUSIN', 85], ['COVERS', 85], ['CRADLE', 85], ['CRAFTY', 80], ['CRATER', 85], ['CREATE', 90],
-  ['CREDIT', 85], ['CRISIS', 85], ['CRITIC', 85], ['CRUISE', 85], ['CUSTOM', 85], ['DAMAGE', 85],
-  ['DANCER', 85], ['DANGER', 85], ['DEALER', 85], ['DECIDE', 85], ['DEFEAT', 85], ['DEFEND', 85],
-  ['DEFINE', 85], ['DEGREE', 85], ['DEMAND', 85], ['DENIAL', 80], ['DEPUTY', 85], ['DESERT', 85],
-  ['DESIGN', 90], ['DESIRE', 85], ['DETAIL', 85], ['DETECT', 85], ['DEVICE', 90], ['DIALOG', 90],
-  ['DIESEL', 85], ['DINNER', 90], ['DIRECT', 85], ['DIVIDE', 85], ['DOCTOR', 90], ['DOMAIN', 90],
-  ['DONKEY', 85], ['DOUBLE', 85], ['DRAGON', 90], ['DRAWER', 85], ['DREAMT', 80], ['DRIVEN', 85],
-  ['DRIVER', 85], ['EASILY', 85], ['EDITOR', 85], ['EFFECT', 85], ['EFFORT', 85], ['EIGHTH', 80],
-  ['ENABLE', 85], ['ENERGY', 90], ['ENGINE', 90], ['ENOUGH', 85], ['ENSURE', 85], ['ENTIRE', 85],
-  ['EQUITY', 85], ['ESCAPE', 85], ['ESTATE', 85], ['ETHICS', 85], ['EVENING', 85], ['EXCEPT', 85],
-  ['EXPAND', 85], ['EXPECT', 85], ['EXPERT', 90], ['EXPORT', 85], ['FABRIC', 85], ['FACTOR', 85],
-  ['FAMILY', 90], ['FAMOUS', 85], ['FARMER', 85], ['FASTER', 85], ['FATHER', 85], ['FELLOW', 85],
-  ['FEMALE', 85], ['FIESTA', 85], ['FIGURE', 85], ['FILTER', 85], ['FINISH', 90], ['FLIGHT', 85],
-  ['FLOWER', 90], ['FLYING', 85], ['FOLLOW', 85], ['FORBID', 80], ['FOREST', 90], ['FORGET', 85],
-  ['FORMAT', 85], ['FORMER', 85], ['FOSTER', 85], ['FOURTH', 85], ['FREEZE', 85], ['FRIEND', 90],
-  ['FROZEN', 85], ['FUTURE', 90], ['GALAXY', 95], ['GARAGE', 85], ['GARDEN', 90], ['GARLIC', 85],
-  ['GATHER', 85], ['GENDER', 85], ['GENTLE', 85], ['GERMAN', 85], ['GLOBAL', 90], ['GOLDEN', 85],
-  ['GOSPEL', 80], ['GOVERN', 85], ['GROOVE', 85], ['GROUND', 85], ['GROWTH', 85], ['GUITAR', 90],
-  ['HAMMER', 85], ['HARBOR', 85], ['HARDLY', 85], ['HEALTH', 90], ['HEAVEN', 85], ['HEIGHT', 85],
-  ['HELMET', 85], ['HIDDEN', 85], ['HOLDER', 85], ['HONEST', 85], ['HORROR', 85], ['HUNGER', 85],
-  ['HUNTER', 85], ['HURDLE', 85], ['IGNORE', 85], ['IMPACT', 85], ['IMPORT', 85], ['INCOME', 85],
-  ['INDEED', 85], ['INFANT', 85], ['INFORM', 85], ['INJURY', 80], ['INSIDE', 85], ['INSIST', 80],
-  ['INTACT', 85], ['INTEND', 85], ['INVEST', 85], ['INVITE', 85], ['ISLAND', 90], ['JACKET', 85],
-  ['JOCKEY', 85], ['JUNGLE', 90], ['JUNIOR', 85], ['KNIGHT', 90], ['LADDER', 85], ['LAPTOP', 90],
-  ['LATEST', 85], ['LAUNCH', 90], ['LAWYER', 85], ['LEADER', 85], ['LEAGUE', 85], ['LEGEND', 90],
-  ['LESSON', 85], ['LETTER', 85], ['LITTLE', 85], ['LIVING', 85], ['LOCATE', 85], ['LONELY', 85],
-  ['LUXURY', 90], ['MAGNET', 85], ['MAKING', 85], ['MANAGE', 85], ['MANNER', 85], ['MANUAL', 85],
-  ['MARBLE', 85], ['MARGIN', 85], ['MARKET', 85], ['MASTER', 85], ['MATTER', 85], ['MEADOW', 85],
-  ['MEDIUM', 85], ['MEMBER', 85], ['MEMORY', 90], ['MENTOR', 85], ['METHOD', 85], ['MIDDLE', 85],
-  ['MINING', 85], ['MINUTE', 85], ['MIRROR', 85], ['MOBILE', 90], ['MODERN', 90], ['MODEST', 85],
-  ['MOMENT', 85], ['MONKEY', 85], ['MORTAL', 80], ['MOTHER', 90], ['MOTION', 85], ['MUSEUM', 90],
-  ['MUTUAL', 85], ['MYSELF', 85], ['NATION', 85], ['NATIVE', 85], ['NATURE', 90], ['NEARBY', 85],
-  ['NEEDLE', 85], ['NICKEL', 85], ['NOBODY', 85], ['NORMAL', 85], ['NOTICE', 85], ['NUMBER', 90],
-  ['OBJECT', 85], ['OBTAIN', 85], ['OFFICE', 90], ['ONLINE', 90], ['ORANGE', 90], ['ORIGIN', 85],
-  ['PALACE', 85], ['PARADE', 85], ['PARENT', 85], ['PARROT', 85], ['PASTEL', 85], ['PATENT', 85],
-  ['PEPPER', 85], ['PERIOD', 85], ['PERSON', 85], ['PHRASE', 85], ['PICNIC', 85], ['PIRATE', 90],
-  ['PLANET', 90], ['PLENTY', 85], ['POCKET', 85], ['POETRY', 85], ['POLICE', 85], ['POLICY', 85],
-  ['POTATO', 85], ['POWDER', 85], ['PRAYER', 85], ['PREFER', 85], ['PRETTY', 85], ['PRINCE', 85],
-  ['PRISON', 85], ['PROFIT', 85], ['PROMPT', 85], ['PUBLIC', 85], ['PUPPET', 85], ['PURPLE', 90],
-  ['PURSUE', 85], ['PUZZLE', 95], ['RABBIT', 85], ['RADIUS', 85], ['RAILRO', 70], ['RAISE', 85],
-  ['RANDOM', 85], ['REASON', 85], ['RECENT', 85], ['RECORD', 85], ['REDUCE', 85], ['REFORM', 85],
-  ['REGION', 85], ['REGRET', 80], ['RELATE', 85], ['RELIEF', 85], ['REMAIN', 85], ['REMEDY', 85],
-  ['REMIND', 85], ['REMOTE', 85], ['RENDER', 85], ['REPAIR', 85], ['REPEAT', 85], ['REPORT', 85],
-  ['RESCUE', 85], ['RESORT', 85], ['RESULT', 85], ['RETAIL', 85], ['RETURN', 85], ['REVEAL', 85],
-  ['REVIEW', 85], ['REWARD', 85], ['RHYTHM', 85], ['RIBBON', 85], ['ROCKET', 90], ['ROUTER', 85],
-  ['RUNNER', 85], ['SAFETY', 85], ['SALARY', 85], ['SALMON', 85], ['SAMPLE', 85], ['SAVING', 85],
-  ['SCHOOL', 90], ['SCREEN', 90], ['SEARCH', 90], ['SEASON', 85], ['SECOND', 85], ['SECRET', 85],
-  ['SECTOR', 85], ['SECURE', 85], ['SEEKER', 85], ['SELDOM', 80], ['SELECT', 85], ['SELLER', 85],
-  ['SENIOR', 85], ['SERIES', 85], ['SERVER', 90], ['SETTLE', 85], ['SHADOW', 85], ['SHIELD', 85],
-  ['SHOWER', 85], ['SIGNAL', 85], ['SILENT', 85], ['SILVER', 90], ['SIMPLE', 85], ['SINGLE', 85],
-  ['SISTER', 85], ['SKETCH', 85], ['SMOOTH', 85], ['SOCCER', 90], ['SOCIAL', 90], ['SOCKET', 85],
-  ['SOURCE', 85], ['SPEECH', 85], ['SPIDER', 85], ['SPIRIT', 85], ['SPRING', 85], ['SQUARE', 85],
-  ['STABLE', 85], ['STATUE', 85], ['STREAM', 85], ['STREET', 90], ['STRIKE', 85], ['STRING', 85],
-  ['STRONG', 85], ['STUDIO', 90], ['SUBMIT', 85], ['SUDDEN', 85], ['SUMMER', 90], ['SUNSET', 90],
-  ['SUPPLY', 85], ['SURVEY', 85], ['SWITCH', 85], ['SYMBOL', 85], ['SYSTEM', 90], ['TALENT', 85],
-  ['TARGET', 85], ['TEMPLE', 85], ['TENNIS', 85], ['THEORY', 85], ['THREAD', 85], ['THREAT', 80],
-  ['TICKET', 85], ['TIMING', 85], ['TISSUE', 80], ['TOMATO', 85], ['TONGUE', 85], ['TOWARD', 85],
-  ['TRAVEL', 90], ['TREATY', 80], ['TUNNEL', 85], ['TURKEY', 85], ['TWELVE', 85], ['TWENTY', 85],
-  ['UNIQUE', 90], ['UPDATE', 90], ['URGENT', 85], ['USEFUL', 85], ['VALLEY', 85], ['VECTOR', 85],
-  ['VENDOR', 85], ['VESSEL', 80], ['VICTIM', 80], ['VICTORY', 85], ['VILLAGE', 85], ['VIOLET', 85],
-  ['VIRTUE', 85], ['VISION', 85], ['VOLUME', 85], ['VOYAGE', 85], ['WALNUT', 85], ['WARMTH', 85],
-  ['WEAPON', 80], ['WEIGHT', 85], ['WINDOW', 90], ['WINTER', 90], ['WISDOM', 85], ['WIZARD', 90],
-  ['WONDER', 85], ['WRITER', 85], ['YELLOW', 85],
-
-  // 7-15 letters key vocabulary
-  ['ACADEMY', 85], ['ACCOUNT', 85], ['ACHIEVE', 85], ['ADDRESS', 85], ['ADVISOR', 85],
-  ['AIRPORT', 90], ['ALGEBRA', 85], ['ALLIANCE', 85], ['ALREADY', 85], ['AMATEUR', 85],
-  ['ANALYST', 85], ['ANIMATE', 85], ['ANTIQUE', 85], ['ANYBODY', 85], ['APOLOGY', 80],
-  ['ARCHIVE', 85], ['ARRANGE', 85], ['ARRIVAL', 85], ['ARTICLE', 85], ['ATTEMPT', 85],
-  ['ATTRACT', 85], ['AUCTION', 85], ['AVERAGE', 85], ['AWESOME', 90], ['BALANCE', 85],
-  ['BALLOON', 85], ['BATTERY', 85], ['BEDROOM', 85], ['BELIEVE', 85], ['BENEATH', 85],
-  ['BENEFIT', 85], ['BICYCLE', 85], ['BLANKET', 85], ['BLOSSOM', 85], ['BOWLING', 85],
-  ['BROTHER', 85], ['CABINET', 85], ['CALCIUM', 80], ['CALENDAR', 90], ['CAPITAL', 85],
-  ['CAPTAIN', 85], ['CAPTURE', 85], ['CATALOG', 85], ['CENTRAL', 85], ['CENTURY', 85],
-  ['CHAMBER', 85], ['CHANNEL', 85], ['CHAPTER', 85], ['CHARITY', 85], ['CHARTER', 85],
-  ['CHIMNEY', 85], ['CHRONIC', 80], ['CIRCUIT', 85], ['CITIZEN', 85], ['CLIMATE', 85],
-  ['COCKPIT', 80], ['COLLEGE', 85], ['COMFORT', 85], ['COMMAND', 85], ['COMPACT', 85],
-  ['COMPANY', 85], ['COMPASS', 85], ['COMPLEX', 85], ['COMPOSE', 85], ['CONCEPT', 85],
-  ['CONCERT', 85], ['CONDUCT', 85], ['CONFIRM', 85], ['CONNECT', 85], ['CONSENT', 85],
-  ['CONTACT', 85], ['CONTAIN', 85], ['CONTENT', 85], ['CONTEST', 85], ['CONTEXT', 85],
-  ['CONTROL', 85], ['CONVERT', 85], ['COOKING', 85], ['COTTAGE', 85], ['COUNCIL', 85],
-  ['COUNTER', 85], ['COUNTRY', 85], ['COUPLED', 80], ['COURAGE', 85], ['COVERED', 80],
-  ['CREATIVE', 90], ['CRICKET', 85], ['CRYSTAL', 85], ['CULTURE', 85], ['CURTAIN', 85],
-  ['CUSTODY', 80], ['CUSTOMS', 85], ['DECADE', 85], ['DEFAULT', 85], ['DEFENSE', 85],
-  ['DELIGHT', 85], ['DELIVER', 85], ['DENSITY', 85], ['DEPOSIT', 85], ['DESERVE', 85],
-  ['DESKTOP', 90], ['DESTINY', 85], ['DESTROY', 85], ['DEVELOP', 85], ['DIAMOND', 90],
-  ['DIGITAL', 90], ['DISCUSS', 85], ['DISEASE', 80], ['DISPLAY', 85], ['DISPUTE', 80],
-  ['DISTANT', 85], ['DIVERSE', 85], ['DYNAMIC', 85], ['ECONOMY', 85], ['EDITION', 85],
-  ['ELEMENT', 85], ['EMBASSY', 85], ['EMERALD', 85], ['EMOTION', 85], ['EMPEROR', 85],
-  ['ENCHANT', 85], ['ENDLESS', 85], ['EPISODE', 85], ['EQUATOR', 85], ['ESSENCE', 85],
-  ['EVENING', 85], ['EVIDENT', 85], ['EXAMINE', 85], ['EXAMPLE', 85], ['EXCITED', 85],
-  ['EXCLUDE', 85], ['EXPENSE', 85], ['EXPLAIN', 85], ['EXPLORE', 90], ['EXPRESS', 85],
-  ['EXTREME', 85], ['FACTORY', 85], ['FACULTY', 85], ['FAILURE', 80], ['FASHION', 85],
-  ['FEATURE', 85], ['FEDERAL', 85], ['FEELING', 85], ['FICTION', 85], ['FINANCE', 85],
-  ['FIREFLY', 85], ['FISHING', 85], ['FITNESS', 85], ['FLEXIBLE', 85], ['FLOWING', 85],
-  ['FOCUSED', 85], ['FOOTBALL', 85], ['FOREVER', 85], ['FORMULA', 85], ['FORTUNE', 85],
-  ['FORWARD', 85], ['FOUNDER', 85], ['FREEDOM', 85], ['GALLERY', 85], ['GATEWAY', 85],
-  ['GENERAL', 85], ['GENUINE', 85], ['GLACIER', 85], ['GLAMOUR', 85], ['GLIMPSE', 85],
-  ['GOODBYE', 85], ['GRADUAL', 85], ['GRAMMAR', 85], ['GRAVITY', 85], ['GROCERY', 85],
-  ['HABITAT', 85], ['HALFWAY', 80], ['HANDFUL', 80], ['HARMONY', 85], ['HARVEST', 85],
-  ['HEADING', 85], ['HEALTHY', 85], ['HEARING', 85], ['HEAVILY', 80], ['HELPFUL', 85],
-  ['HEROISM', 85], ['HIGHWAY', 85], ['HISTORY', 85], ['HOLIDAY', 85], ['HORIZON', 85],
-  ['HOSPITAL', 85], ['HUNDRED', 85], ['HUSBAND', 85], ['ICEBERG', 85], ['IMAGINE', 85],
-  ['IMPRESS', 85], ['IMPROVE', 85], ['INCLUDE', 85], ['INFANTRY', 80], ['INITIAL', 85],
-  ['INNOVATE', 90], ['INQUIRY', 85], ['INSIGHT', 85], ['INSPECT', 85], ['INSPIRE', 85],
-  ['INSTALL', 85], ['INSTANT', 85], ['INSTEAD', 85], ['INTENSE', 85], ['INTERNET', 95],
-  ['JOURNEY', 90], ['JUSTICE', 85], ['KITCHEN', 85], ['LANTERN', 85], ['LAUGHTER', 85],
-  ['LEISURE', 85], ['LIBRARY', 85], ['LIGHTNING', 85], ['LIMITED', 85], ['MACHINE', 85],
-  ['MAGAZINE', 85], ['MAJESTY', 85], ['MAMMOTH', 85], ['MANAGER', 85], ['MARATHON', 85],
-  ['MASSIVE', 85], ['MAXIMUM', 85], ['MEANING', 85], ['MEASURE', 85], ['MEDICAL', 85],
-  ['MEETING', 85], ['MELODY', 85], ['MENTION', 85], ['MESSAGE', 85], ['MIDNIGHT', 85],
-  ['MILLION', 85], ['MINERAL', 85], ['MINIMUM', 85], ['MIRACLE', 85], ['MISSION', 85],
-  ['MISTAKE', 85], ['MIXED', 85], ['MIXTURE', 85], ['MONSTER', 85], ['MONUMENT', 85],
-  ['MORNING', 85], ['MOUNTAIN', 90], ['MYSTERY', 90], ['NATURAL', 85], ['NETWORK', 90],
-  ['NEUTRAL', 85], ['NOMINEE', 85], ['NOTEBOOK', 85], ['NOTHING', 85], ['NURSERY', 85],
-  ['OBSERVE', 85], ['OBVIOUS', 85], ['OFFICER', 85], ['OLYMPIC', 85], ['ONGOING', 85],
-  ['OPINION', 85], ['OPTIMUM', 85], ['ORGANIC', 85], ['OUTCOME', 85], ['OUTDOOR', 85],
-  ['OUTLOOK', 85], ['OUTSIDE', 85], ['PACKAGE', 85], ['PAINTER', 85], ['PARKING', 85],
-  ['PARTNER', 85], ['PASSAGE', 85], ['PASSION', 85], ['PATIENT', 85], ['PATTERN', 85],
-  ['PENALTY', 85], ['PENDING', 85], ['PENGUIN', 85], ['PERFECT', 85], ['PERFORM', 85],
-  ['PIONEER', 85], ['PLASTIC', 85], ['PODCAST', 90], ['POPULAR', 85], ['PORTION', 85],
-  ['POVERTY', 80], ['PREDICT', 85], ['PREMIER', 85], ['PREMIUM', 85], ['PREPARE', 85],
-  ['PRESENT', 85], ['PREVENT', 85], ['PRIMARY', 85], ['PRIVATE', 85], ['PROBLEM', 85],
-  ['PROCEED', 85], ['PROCESS', 85], ['PRODUCE', 85], ['PRODUCT', 85], ['PROFILE', 85],
-  ['PROGRAM', 85], ['PROJECT', 85], ['PROMISE', 85], ['PROTECT', 85], ['PROVIDE', 85],
-  ['PURPOSE', 85], ['PURSUIT', 85], ['QUALITY', 85], ['QUARTER', 85], ['RADICAL', 85],
-  ['RAILWAY', 85], ['REALITY', 85], ['RECEIVE', 85], ['RECOVERY', 85], ['REFLECT', 85],
-  ['REGULAR', 85], ['RELEASE', 85], ['REPLACE', 85], ['REQUEST', 85], ['REQUIRE', 85],
-  ['RESERVE', 85], ['RESOLVE', 85], ['RESPECT', 85], ['RESPOND', 85], ['RESTART', 85],
-  ['RESTORE', 85], ['REVERSE', 85], ['REVOLVE', 85], ['ROMANCE', 85], ['ROUTINE', 85],
-  ['RUNNING', 85], ['SAILING', 85], ['SATISFY', 85], ['SCHOLAR', 85], ['SCIENCE', 90],
-  ['SECTION', 85], ['SEGMENT', 85], ['SERVICE', 85], ['SESSION', 85], ['SETTING', 85],
-  ['SEVENTH', 85], ['SHELTER', 85], ['SILENCE', 85], ['SIMILAR', 85], ['SINCERE', 85],
-  ['SITUATION', 85], ['SOCIETY', 85], ['SOLDIER', 85], ['SOMEONE', 85], ['SPECIAL', 85],
-  ['SPECIES', 85], ['STADIUM', 85], ['STATION', 85], ['STORAGE', 85], ['STRANGE', 85],
-  ['STUDENT', 85], ['SUBJECT', 85], ['SUCCESS', 85], ['SUGGEST', 85], ['SUMMARY', 85],
-  ['SUPPORT', 85], ['SURFACE', 85], ['SURPRISE', 85], ['SURVIVE', 85], ['SUSPECT', 85],
-  ['SYMPTOM', 85], ['TEACHER', 85], ['THEATER', 85], ['THOUGHT', 85], ['THROUGH', 85],
-  ['TONIGHT', 85], ['TOURISM', 85], ['TRAFFIC', 85], ['TRIUMPH', 85], ['TROUBLE', 85],
-  ['TSUNAMI', 85], ['TURBINE', 85], ['TYPICAL', 85], ['UNICORN', 90], ['UNIFORM', 85],
-  ['UNKNOWN', 85], ['UNUSUAL', 85], ['UPGRADE', 90], ['UTILITY', 85], ['VALIANT', 80],
-  ['VALUABLE', 85], ['VARIETY', 85], ['VEHICLE', 85], ['VENTURE', 85], ['VERSION', 85],
-  ['VICTORY', 85], ['VILLAGE', 85], ['VINTAGE', 85], ['VIOLENT', 80], ['VIRTUAL', 90],
-  ['VOLCANO', 85], ['VOYAGER', 85], ['WALKING', 85], ['WARRIOR', 85], ['WEATHER', 85],
-  ['WEBSITE', 90], ['WELCOME', 85], ['WESTERN', 85], ['WHISPER', 85], ['WINNING', 85],
-  ['WITHOUT', 85], ['WITNESS', 85], ['WORKING', 85], ['WORSHIP', 80], ['YOUTH', 85],
-  // Longer words (8-15)
-  ['ABSOLUTE', 85], ['ABSTRACT', 85], ['ACADEMIC', 85], ['ACCEPTED', 85], ['ACCIDENT', 85],
-  ['ACCURACY', 85], ['ACHIEVED', 85], ['ACTIVITY', 90], ['ADDITION', 85], ['ADEQUATE', 85],
-  ['ADVANCED', 85], ['AIRPLANE', 85], ['ALLIANCE', 85], ['AMERICAN', 85], ['ANALYSIS', 85],
-  ['ANIMATION', 85], ['ANNOUNCED', 85], ['APARTMENT', 85], ['APPARENT', 85], ['APPROVAL', 85],
-  ['ARGUMENT', 85], ['ARTISTIC', 85], ['ASSEMBLY', 85], ['ATHLETIC', 85], ['ATTITUDE', 85],
-  ['AUDIENCE', 85], ['AUTOMATIC', 85], ['BASEBALL', 85], ['BECOMING', 85], ['BEHAVIOR', 85],
-  ['BIRTHDAY', 90], ['BOUNDARY', 85], ['BUILDING', 85], ['BUSINESS', 85], ['CALENDAR', 85],
-  ['CAMPAIGN', 85], ['CAPACITY', 85], ['CELEBRATE', 90], ['CHAMPION', 90], ['CHEMICAL', 85],
-  ['CHILDHOOD', 85], ['CHOCOLATE', 90], ['CINEMATIC', 85], ['CLASSICAL', 85], ['CLOTHING', 85],
-  ['COCKTAIL', 85], ['COLLEAGUE', 85], ['COMBINED', 85], ['COMFORTABLE', 85], ['COMMUNITY', 85],
-  ['COMPANY', 85], ['COMPUTER', 95], ['CONCLUDE', 85], ['CONCRETE', 85], ['CONFLICT', 85],
-  ['CONFUSION', 85], ['CONNECTION', 85], ['CONSCIOUS', 85], ['CONSTANT', 85], ['CONSUMER', 85],
-  ['CONTINUE', 85], ['CONTRACT', 85], ['CREATION', 85], ['CRIMINAL', 85], ['CRITICAL', 85],
-  ['CUSTOMER', 85], ['DATABASE', 95], ['DAUGHTER', 85], ['DECISION', 85], ['DELICATE', 85],
-  ['DELIVERY', 85], ['DESIGNER', 85], ['DETAILED', 85], ['DIAMETER', 85], ['DIRECTOR', 85],
-  ['DISASTER', 85], ['DISCOVERY', 90], ['DISCUSS', 85], ['DISTANCE', 85], ['DISTRICT', 85],
-  ['DIVISION', 85], ['DOCTRINE', 85], ['DOCUMENT', 85], ['DOMESTIC', 85], ['DOMINANT', 85],
-  ['DOWNTOWN', 85], ['DRAMATIC', 85], ['DURATION', 85], ['DYNAMICS', 85], ['ECONOMIC', 85],
-  ['EDUCATED', 85], ['ELECTION', 85], ['ELECTRIC', 85], ['ELECTRON', 85], ['ELEMENTS', 85],
-  ['ELEVATOR', 85], ['EMPHASIS', 85], ['EMPLOYEE', 85], ['ENGINEER', 90], ['ENORMOUS', 85],
-  ['ENTERPRISE', 85], ['ENTIRELY', 85], ['EQUALITY', 85], ['EQUATION', 85], ['ESTIMATE', 85],
-  ['EVERYDAY', 85], ['EVERYONE', 85], ['EVIDENCE', 85], ['EXCHANGE', 85], ['EXCITING', 85],
-  ['EXERCISE', 85], ['EXISTING', 85], ['EXPANSION', 85], ['EXPERIENCE', 90], ['EXPERIMENT', 85],
-  ['EXPOSURE', 85], ['EXTERNAL', 85], ['FACILITY', 85], ['FAMILIAR', 85], ['FANTASTIC', 90],
-  ['FAVORITE', 85], ['FESTIVAL', 90], ['FINANCIAL', 85], ['FIREWORKS', 90], ['FLEXIBLE', 85],
-  ['FLOATING', 85], ['FOOTBALL', 85], ['FORECAST', 85], ['FORTUNATE', 85], ['FOUNTAIN', 85],
-  ['FREQUENT', 85], ['FRIENDLY', 85], ['FUNCTION', 85], ['GALLERY', 85], ['GENERATION', 85],
-  ['GENEROUS', 85], ['GOVERNOR', 85], ['GRADUATE', 85], ['GRATEFUL', 85], ['GUARANTEE', 85],
-  ['GUIDANCE', 85], ['HAPPENED', 85], ['HARDWARE', 85], ['HEADLINE', 85], ['HERITAGE', 85],
-  ['HOSPITAL', 85], ['HUMANITY', 85], ['IDENTIFY', 85], ['IDENTITY', 85], ['ILLUSION', 85],
-  ['IMMEDIATE', 85], ['IMPORTANT', 85], ['IMPROVED', 85], ['INCIDENT', 85], ['INCLUDED', 85],
-  ['INCREASE', 85], ['INDUSTRY', 85], ['INFINITE', 85], ['INFORMED', 85], ['INHERENT', 85],
-  ['INITIALS', 85], ['INNOCENT', 85], ['INNOVATION', 90], ['INSECURE', 80], ['INSTANCE', 85],
-  ['INSTITUTE', 85], ['INSURANCE', 85], ['INTEGRAL', 85], ['INTELLECT', 85], ['INTEREST', 85],
-  ['INTERNAL', 85], ['INTERVAL', 85], ['INTIMATE', 85], ['INVENTOR', 85], ['INVESTOR', 85],
-  ['ISOLATED', 85], ['JUDGMENT', 85], ['JUNCTION', 85], ['KEYBOARD', 90], ['LANGUAGE', 90],
-  ['LEARNING', 85], ['LIGHTING', 85], ['LOCATION', 85], ['LOGISTIC', 85], ['MAGICIAN', 85],
-  ['MAINTAIN', 85], ['MAJORITY', 85], ['MANAGING', 85], ['MANUALLY', 85], ['MATERIAL', 85],
-  ['MEDICINE', 85], ['MEDIEVAL', 85], ['MEMORIAL', 85], ['METAPHOR', 85], ['MILITARY', 85],
-  ['MINISTER', 85], ['MINORITY', 85], ['MOMENTUM', 85], ['MONETARY', 85], ['MONUMENT', 85],
-  ['MORTGAGE', 80], ['MOUNTAIN', 85], ['MUSICIAN', 90], ['MUTATION', 85], ['NATIONAL', 85],
-  ['NAVIGATE', 85], ['NEGATIVE', 85], ['NEIGHBOR', 85], ['NOTEBOOK', 85], ['NUMEROUS', 85],
-  ['OBJECTIVE', 85], ['OBSERVER', 85], ['OBSTACLE', 85], ['OFFICIAL', 85], ['OPERATOR', 85],
-  ['OPPONENT', 85], ['OPPOSITE', 85], ['OPTIMISM', 85], ['ORDINARY', 85], ['ORGANISM', 85],
-  ['ORIGINAL', 85], ['OUTCOME', 85], ['OUTDOORS', 85], ['OVERCOME', 85], ['OVERHEAD', 85],
-  ['OVERSEAS', 85], ['PAINTING', 85], ['PARALLEL', 85], ['PARTICLE', 85], ['PATIENCE', 85],
-  ['PERSONAL', 85], ['PHARMACY', 85], ['PHYSICAL', 85], ['PLATFORM', 90], ['PLEASURE', 85],
-  ['PORTRAIT', 85], ['POSITION', 85], ['POSITIVE', 85], ['POSSIBLE', 85], ['POWERFUL', 85],
-  ['PRACTICE', 85], ['PRECIOUS', 85], ['PRESCRIBE', 85], ['PRESENCE', 85], ['PRESSURE', 85],
-  ['PREVIOUS', 85], ['PRINCIPAL', 85], ['PRIORITY', 85], ['PRODUCER', 85], ['PROFESSOR', 85],
-  ['PROGRESS', 85], ['PROMISED', 85], ['PROPOSAL', 85], ['PROSPECT', 85], ['PROTOCOL', 85],
-  ['PROVINCE', 85], ['PUNISHMENT', 80], ['PURCHASE', 85], ['QUESTION', 90], ['RAILROAD', 85],
-  ['REACTION', 85], ['REALISTIC', 85], ['REASONING', 85], ['RECEIVED', 85], ['RECEIVER', 85],
-  ['RECOGNIZE', 85], ['RECOVERY', 85], ['REGIONAL', 85], ['REGISTER', 85], ['RELATION', 85],
-  ['RELATIVE', 85], ['RELEVANT', 85], ['RELIABLE', 85], ['RELIGION', 85], ['REMEMBER', 85],
-  ['REPORTER', 85], ['REPRESENT', 85], ['REQUIRED', 85], ['RESEARCH', 85], ['RESERVED', 85],
-  ['RESIDENT', 85], ['RESOURCE', 85], ['RESPONSE', 85], ['RESTRICT', 85], ['REVERSAL', 85],
-  ['REVISION', 85], ['ROMANTIC', 85], ['SANDWICH', 85], ['SCHEDULE', 85], ['SCIENTIST', 85],
-  ['SECURITY', 85], ['SELECTION', 85], ['SENTENCE', 85], ['SEPARATE', 85], ['SEQUENCE', 85],
-  ['SERVICES', 85], ['SHIPMENT', 85], ['SHOULDER', 85], ['SIGNATURE', 85], ['SILENTLY', 85],
-  ['SIMULATE', 85], ['SITUATION', 85], ['SOFTWARE', 95], ['SOLUTION', 90], ['SOMEBODY', 85],
-  ['SOUTHERN', 85], ['SPECIFIC', 85], ['SPECTRUM', 85], ['STANDARD', 85], ['STARLIGHT', 90],
-  ['STARTING', 85], ['STRATEGY', 85], ['STRENGTH', 85], ['STRUGGLE', 85], ['STUDENTS', 85],
-  ['STYLE', 85], ['SUBJECTS', 85], ['SUBSTANCE', 85], ['SUDDENLY', 85], ['SUITABLE', 85],
-  ['SUPERIOR', 85], ['SUPPLIED', 85], ['SUPPLIER', 85], ['SURPRISE', 85], ['SURROUND', 85],
-  ['SURVIVAL', 85], ['SWIMMING', 85], ['SYLLABLE', 85], ['SYMBOLIC', 85], ['SYMPATHY', 85],
-  ['TAXATION', 80], ['TEACHING', 85], ['TEAMMATE', 85], ['TECHNIQUE', 85], ['TELESCOPE', 90],
-  ['TEMPORARY', 85], ['TENDENCY', 85], ['TERMINAL', 85], ['TERRITORY', 85], ['TESTIMONY', 85],
-  ['THINKING', 85], ['THIRTEEN', 85], ['THOUGHTS', 85], ['THOUSAND', 85], ['THRILLER', 85],
-  ['TOGETHER', 90], ['TOLERANCE', 85], ['TOMORROW', 85], ['TRACKING', 85], ['TRAINING', 85],
-  ['TRANSFER', 85], ['TRANSPORT', 85], ['TRAVELER', 85], ['TREASURE', 90], ['TREATMENT', 85],
-  ['TRIANGLE', 85], ['TROPICAL', 85], ['ULTIMATE', 90], ['UMBRELLA', 85], ['UNDERSTAND', 90],
-  ['UNIVERSE', 90], ['UNLIKELY', 85], ['VALUABLE', 85], ['VARIABLE', 85], ['VARIATION', 85],
-  ['VERTICAL', 85], ['VICTORIA', 85], ['VIOLENCE', 80], ['VOLUNTEER', 85], ['WARRANTY', 85],
-  ['WILDLIFE', 85], ['WIRELESS', 90], ['WORKSHOP', 85], ['YESTERDAY', 85],
-  // 15-letter entries for spanning themes
-  ['CROSSWORDPUZZLE', 95], ['DISCORDCOMMUNITY', 90], ['INTERLOCKINGGRID', 90],
-  ['TIMEATTACKMODES', 85], ['SERVERLEADERBOARD', 95], ['AUTHENTICATIONKEY', 85],
-  ['CONSTRAINTSOLVER', 90], ['ROTATIONALSYSTEM', 85], ['ALGORITHMICDESIGN', 90],
-  ['BACKTRACKINGFILL', 90],
-];
+interface LengthIndex {
+  words: ScoredWord[];
+  // bits[pos * 26 + letter] is a bitset over `words` of entries with that letter at that position.
+  bits: Uint32Array[];
+}
 
 export class CrosswordDictionary {
   private wordsByLength: Map<number, ScoredWord[]> = new Map();
-  private wordsByPattern: Map<string, ScoredWord[]> = new Map();
   private allWordsSet: Set<string> = new Set();
+  // Built lazily per length and dropped when words are added.
+  private indexes: Map<number, LengthIndex> = new Map();
 
-  constructor() {
-    this.loadWords(RAW_DICTIONARY);
+  constructor(entries: [string, number][] = loadWordListFile()) {
+    this.loadWords(entries);
   }
 
   private loadWords(raw: [string, number][]) {
     for (const [w, score] of raw) {
       const clean = w.trim().toUpperCase();
-      if (OFFENSIVE_BLOCKLIST.has(clean)) {
+      if (!/^[A-Z]+$/.test(clean) || isOffensive(clean)) {
         continue;
       }
-      if (clean.length < 3 || clean.length > 15) {
+      if (clean.length < 3 || clean.length > 15 || this.allWordsSet.has(clean)) {
         continue;
       }
 
@@ -572,6 +110,10 @@ export class CrosswordDictionary {
     }
   }
 
+  public get size(): number {
+    return this.allWordsSet.size;
+  }
+
   public hasWord(word: string): boolean {
     return this.allWordsSet.has(word.trim().toUpperCase());
   }
@@ -581,7 +123,7 @@ export class CrosswordDictionary {
    */
   public addCustomWord(word: string, score = 98) {
     const clean = word.trim().toUpperCase().replace(/[^A-Z]/g, '');
-    if (clean.length < 3 || clean.length > 15 || OFFENSIVE_BLOCKLIST.has(clean)) return;
+    if (clean.length < 3 || clean.length > 15 || isOffensive(clean)) return;
 
     if (!this.allWordsSet.has(clean)) {
       this.allWordsSet.add(clean);
@@ -590,41 +132,104 @@ export class CrosswordDictionary {
         this.wordsByLength.set(clean.length, []);
       }
       this.wordsByLength.get(clean.length)!.unshift(entry);
+      this.indexes.delete(clean.length);
     }
+  }
+
+  private getIndex(len: number): LengthIndex {
+    let index = this.indexes.get(len);
+    if (index) return index;
+
+    const words = this.wordsByLength.get(len) || [];
+    const wordsPerBitset = Math.ceil(words.length / 32);
+    const bits = Array.from({ length: len * 26 }, () => new Uint32Array(wordsPerBitset));
+    words.forEach((entry, i) => {
+      for (let pos = 0; pos < len; pos++) {
+        bits[pos * 26 + (entry.word.charCodeAt(pos) - 65)][i >>> 5] |= 1 << (i & 31);
+      }
+    });
+
+    index = { words, bits };
+    this.indexes.set(len, index);
+    return index;
+  }
+
+  /**
+   * Returns the bitset of words matching the pattern, or null when every position is a wildcard.
+   */
+  private matchBits(pattern: string, index: LengthIndex): Uint32Array | null {
+    let result: Uint32Array | null = null;
+    for (let pos = 0; pos < pattern.length; pos++) {
+      const ch = pattern.charCodeAt(pos);
+      if (ch === 46) continue; // '.'
+      const letterBits = index.bits[pos * 26 + (ch - 65)];
+      if (!letterBits) return new Uint32Array(0);
+      if (!result) {
+        result = letterBits.slice();
+      } else {
+        for (let k = 0; k < result.length; k++) result[k] &= letterBits[k];
+      }
+    }
+    return result;
   }
 
   /**
    * Finds matching candidate words given a pattern like "C..T" or "A.P.E"
-   * '.' represents any letter.
+   * '.' represents any letter. Results keep the dictionary's score order.
    */
   public findMatches(pattern: string): ScoredWord[] {
-    const len = pattern.length;
-    const candidates = this.wordsByLength.get(len) || [];
-
-    const isAllWildcards = !pattern.split('').some((c) => c !== '.');
-    if (isAllWildcards) {
-      return candidates;
-    }
+    const index = this.getIndex(pattern.length);
+    const bits = this.matchBits(pattern, index);
+    if (!bits) return index.words;
 
     const matches: ScoredWord[] = [];
-    for (let i = 0; i < candidates.length; i++) {
-      const item = candidates[i];
-      let matchesPattern = true;
-
-      for (let j = 0; j < len; j++) {
-        const pChar = pattern[j];
-        if (pChar !== '.' && pChar !== item.word[j]) {
-          matchesPattern = false;
-          break;
-        }
-      }
-
-      if (matchesPattern) {
-        matches.push(item);
+    for (let k = 0; k < bits.length; k++) {
+      let block = bits[k];
+      while (block !== 0) {
+        const bit = 31 - Math.clz32(block & -block);
+        matches.push(index.words[(k << 5) + bit]);
+        block &= block - 1;
       }
     }
-
     return matches;
+  }
+
+  /**
+   * Counts words matching the pattern (including words already used elsewhere).
+   */
+  public countMatches(pattern: string): number {
+    const index = this.getIndex(pattern.length);
+    const bits = this.matchBits(pattern, index);
+    if (!bits) return index.words.length;
+
+    let count = 0;
+    for (let k = 0; k < bits.length; k++) {
+      let block = bits[k];
+      while (block !== 0) {
+        block &= block - 1;
+        count++;
+      }
+    }
+    return count;
+  }
+
+  /**
+   * True when at least one word matching the pattern isn't in `exclude`.
+   */
+  public hasMatch(pattern: string, exclude: Set<string>): boolean {
+    const index = this.getIndex(pattern.length);
+    const bits = this.matchBits(pattern, index);
+    if (!bits) return index.words.some((w) => !exclude.has(w.word));
+
+    for (let k = 0; k < bits.length; k++) {
+      let block = bits[k];
+      while (block !== 0) {
+        const bit = 31 - Math.clz32(block & -block);
+        if (!exclude.has(index.words[(k << 5) + bit].word)) return true;
+        block &= block - 1;
+      }
+    }
+    return false;
   }
 }
 

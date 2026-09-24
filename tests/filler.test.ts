@@ -1,7 +1,8 @@
-import { parseGridStringTemplate } from '../packages/shared/src/index.js';
+import { computeGridSlots, parseGridStringTemplate } from '../packages/shared/src/index.js';
 import { describe, expect, it } from 'vitest';
 import { CrosswordFiller } from '../packages/server/src/engine/filler.js';
-import { CrosswordDictionary } from '../packages/server/src/engine/wordlist.js';
+import { getValidatedTemplates } from '../packages/server/src/engine/templates.js';
+import { CrosswordDictionary, defaultDictionary } from '../packages/server/src/engine/wordlist.js';
 
 describe('Crossword Backtracking Filler', () => {
   it('fills a grid reproducibly using a fixed random seed', () => {
@@ -60,5 +61,21 @@ describe('Crossword Backtracking Filler', () => {
     expect(words.length).toBe(2);
     // Must not reuse "WORD" twice
     expect(words[0]).not.toBe(words[1]);
+  });
+
+  it('fills a shipped template with unique dictionary words', () => {
+    const filler = new CrosswordFiller(defaultDictionary);
+    for (const grid of [getValidatedTemplates()[0], getValidatedTemplates()[2]]) {
+      const result = filler.fill(grid, { seed: 2, timeBudgetMs: 10000 });
+      expect(result.success).toBe(true);
+
+      // Check every slot from the final letters, including words formed only by crossings.
+      const { acrossSlots, downSlots } = computeGridSlots(grid);
+      const words = [...acrossSlots, ...downSlots].map((s) =>
+        s.cells.map((c) => result.solution![c.row][c.col]).join('')
+      );
+      expect(words.filter((w) => !defaultDictionary.hasWord(w))).toEqual([]);
+      expect(new Set(words).size).toBe(words.length);
+    }
   });
 });

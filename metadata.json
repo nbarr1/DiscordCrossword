@@ -1,0 +1,6 @@
+{
+  "name": "Daily Crossword Discord Activity",
+  "description": "A daily 15x15 crossword Discord Activity with server leaderboards, wall-clock timing, penalty tracking, and companion bot.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

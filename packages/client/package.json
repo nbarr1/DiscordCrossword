@@ -1,0 +1,9 @@
+{
+  "name": "@crossword/client",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "./src/main.tsx",
+  "dependencies": {
+    "@crossword/shared": "*"
+  }
+}

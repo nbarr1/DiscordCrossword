@@ -1,12 +1,12 @@
 # Discord Daily Crossword Activity
 
-A full-featured Discord Activity where server members solve a daily 15x15 crossword on their own schedule. Server rankings track each solver's time, incorrect answers add time penalties, and a companion bot posts daily leaderboards to a configured channel.
+A full-featured Discord Activity where server members solve a daily crossword (12x12, set by `GAME_CONFIG` in `packages/shared/src/config.ts`) on their own schedule. Server rankings track each solver's time, incorrect answers add time penalties, and a companion bot posts daily leaderboards to a configured channel.
 
 ---
 
 ## Features
 
-- **Standard 15x15 Daily Crossword**: Follows professional crossword specifications (180-degree rotational symmetry, fully connected white squares, no two-letter words).
+- **Daily 12x12 Crossword**: Follows professional crossword specifications (180-degree rotational symmetry, fully connected white squares, no two-letter words).
 - **Discord Embedded App SDK**: Embedded inside the Discord client with OAuth identity and guild verification.
 - **Server-Authoritative Wall-Clock Timer**: The clock starts when the player opens the puzzle and runs continuously on wall clock time.
 - **Competitive Game Rules**:
@@ -16,7 +16,7 @@ A full-featured Discord Activity where server members solve a daily 15x15 crossw
 - **Companion Bot & Slash Commands**:
   - `/crossword-setup channel:<channel> [announcements:<bool>]`: Configures the leaderboard channel (requires *Manage Server* permission).
   - `/crossword-leaderboard`: Ephemeral spoiler-free server standings.
-  - `/crossword`: Activity launch Primary Entry Point.
+  - `/crossword`: The app's Entry Point command (App Launcher). It replaces Discord's default "Launch" command, and Discord launches the Activity directly.
 - **Automatic Scheduled Releases**: Advances every day at 00:00 UTC, posts closing leaderboards, and buffers puzzles 2–7 days ahead using an LLM-assisted constructor.
 - **CLI Suite**: Tooling to generate, preview in browser, and approve/reject puzzles.
 
@@ -55,15 +55,15 @@ Create a `.env` file based on `.env.example`:
 1. Go to the [Discord Developer Portal](https://discord.com/developers/applications).
 2. Create an Application, copy your **Client ID**, **Client Secret**, and **Public Key**.
 3. Under **Bot**, create a bot user and copy the **Bot Token**.
-4. In **Activities**:
-   - Enable Activities.
-   - Set **Interactions Endpoint URL** to `https://<YOUR_APP_URL>/api/interactions`.
-   - Add URL Mappings routing `/` to your app URL.
-5. Bot Permissions required:
+4. On the **General Information** page, set **Interactions Endpoint URL** to `https://<YOUR_APP_URL>/api/interactions`. The server must be running with `DISCORD_PUBLIC_KEY` set, because Discord verifies the endpoint when you save it.
+5. Under **Activities**:
+   - Enable Activities (Settings), and select the platforms you want under **Supported Platforms**.
+   - Under **URL Mappings**, map the `/` prefix to your app's host (without `https://`).
+6. Bot Permissions required:
    - `Send Messages` (0x800)
    - `Embed Links` (0x4000)
    - `Use External Emojis` (optional)
-6. Invite the Bot to your test server with `applications.commands` and `bot` scopes.
+7. Invite the Bot to your test server with `applications.commands` and `bot` scopes.
 
 ---
 
@@ -108,4 +108,4 @@ npm run cli approve <puzzleId>
 npm run build
 npm start
 ```
-The server serves both the Express API and the Vite production static bundle from `dist/` on port 3000.
+`npm start` sets `NODE_ENV=production` (POSIX shells; on Windows, set it yourself), so the server serves the Vite production bundle from `dist/` on port 3000 and disables the development mock login. `VITE_DISCORD_CLIENT_ID` must be set when you run `npm run build`, because Vite compiles it into the client.

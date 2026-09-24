@@ -36,7 +36,7 @@ export const HowToPlayModal: React.FC<HowToPlayModalProps> = ({ isOpen, onClose 
             <div>
               <h3 className="font-bold text-white">One Daily Puzzle (24h Window)</h3>
               <p className="text-xs text-[#949ba4] mt-0.5">
-                A new standard 15x15 crossword drops daily at <strong>00:00 UTC</strong>. The puzzle is open for 24 hours of ranked play.
+                A new crossword drops daily at <strong>00:00 UTC</strong>. The puzzle is open for 24 hours of ranked play.
               </p>
             </div>
           </div>

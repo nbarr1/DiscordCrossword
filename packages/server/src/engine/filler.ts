@@ -1,5 +1,5 @@
 import { GAME_CONFIG, GridSlot, computeGridSlots } from '@crossword/shared';
-import { CrosswordDictionary, defaultDictionary, ScoredWord } from './wordlist.js';
+import { CrosswordDictionary, defaultDictionary } from './wordlist.js';
 
 export interface FillOptions {
   timeBudgetMs?: number;
@@ -86,11 +86,28 @@ export class CrosswordFiller {
       return pattern;
     };
 
-    const isSlotFilled = (slot: GridSlot): boolean => {
-      return !getPattern(slot).includes('.');
-    };
+    // Slots crossing each slot, so forward checking only revisits entries a placement can affect.
+    const slotKey = (slot: GridSlot) => `${slot.number}-${slot.direction}`;
+    const slotsByCell = new Map<string, GridSlot[]>();
+    for (const slot of allSlots) {
+      for (const { row, col } of slot.cells) {
+        const cellKey = `${row},${col}`;
+        if (!slotsByCell.has(cellKey)) slotsByCell.set(cellKey, []);
+        slotsByCell.get(cellKey)!.push(slot);
+      }
+    }
+    const crossingSlots = new Map<string, GridSlot[]>();
+    for (const slot of allSlots) {
+      const crossing = new Set<GridSlot>();
+      for (const { row, col } of slot.cells) {
+        for (const other of slotsByCell.get(`${row},${col}`)!) {
+          if (other !== slot) crossing.add(other);
+        }
+      }
+      crossingSlots.set(slotKey(slot), [...crossing]);
+    }
 
-    const solve = (): boolean => {
+    const search = (implicit: string[]): boolean => {
       nodesExplored++;
       if (nodesExplored % 20 === 0) {
         if (Date.now() - startTime > timeBudgetMs) {
@@ -100,7 +117,7 @@ export class CrosswordFiller {
       }
 
       // Find unfilled slots and pick the most constrained (MRV)
-      const unfilled: { slot: GridSlot; pattern: string; candidates: ScoredWord[] }[] = [];
+      let target: { slot: GridSlot; pattern: string; count: number } | null = null;
 
       for (const slot of allSlots) {
         const key = `${slot.number}-${slot.direction}`;
@@ -120,39 +137,35 @@ export class CrosswordFiller {
           }
           slotWords[key] = word;
           usedWords.add(word);
+          implicit.push(key);
           continue;
         }
 
-        const candidates = this.dictionary
-          .findMatches(pattern)
-          .filter((c) => !usedWords.has(c.word));
-
-        if (candidates.length === 0) {
+        const count = this.dictionary.countMatches(pattern);
+        if (count === 0) {
           // Dead end!
           return false;
         }
 
-        unfilled.push({ slot, pattern, candidates });
+        if (!target || count < target.count) {
+          target = { slot, pattern, count };
+        }
       }
 
-      if (unfilled.length === 0) {
+      if (!target) {
         // All slots filled!
         return true;
       }
 
-      // Sort unfilled slots: fewest candidates first (MRV)
-      unfilled.sort((a, b) => a.candidates.length - b.candidates.length);
-
-      const target = unfilled[0];
       const slot = target.slot;
       const key = `${slot.number}-${slot.direction}`;
 
-      // Order candidates by quality score, with deterministic slight jitter
-      const candidates = [...target.candidates];
-      candidates.sort((a, b) => {
-        if (b.score !== a.score) return b.score - a.score;
-        return random() - 0.5;
-      });
+      // Order candidates by quality score, with a seeded jitter so fills vary between runs
+      const candidates = this.dictionary
+        .findMatches(target.pattern)
+        .filter((c) => !usedWords.has(c.word))
+        .map((c) => ({ ...c, rank: c.score + random() * 10 }))
+        .sort((a, b) => b.rank - a.rank);
 
       for (const cand of candidates) {
         if (usedWords.has(cand.word)) continue;
@@ -168,20 +181,18 @@ export class CrosswordFiller {
         usedWords.add(cand.word);
         slotWords[key] = cand.word;
 
-        // Forward-checking: verify that intersecting slots still have at least 1 candidate
+        // Forward-checking: verify that crossing slots still have at least 1 candidate
         let forwardCheckOk = true;
-        for (const other of allSlots) {
-          const otherKey = `${other.number}-${other.direction}`;
-          if (slotWords[otherKey]) continue;
+        for (const other of crossingSlots.get(key)!) {
+          if (slotWords[slotKey(other)]) continue;
 
           const pat = getPattern(other);
-          if (pat.includes('.')) {
-            const matches = this.dictionary.findMatches(pat);
-            const validMatches = matches.filter((m) => !usedWords.has(m.word));
-            if (validMatches.length === 0) {
-              forwardCheckOk = false;
-              break;
-            }
+          const ok = pat.includes('.')
+            ? this.dictionary.hasMatch(pat, usedWords)
+            : this.dictionary.hasWord(pat) && !usedWords.has(pat);
+          if (!ok) {
+            forwardCheckOk = false;
+            break;
           }
         }
 
@@ -201,6 +212,18 @@ export class CrosswordFiller {
         if (timedOut) return false;
       }
 
+      return false;
+    };
+
+    // Words completed by crossing letters are recorded as a side effect of search();
+    // undo them when this branch fails, or backtracking leaves stale (possibly invalid) entries.
+    const solve = (): boolean => {
+      const implicit: string[] = [];
+      if (search(implicit)) return true;
+      for (const key of implicit) {
+        usedWords.delete(slotWords[key]);
+        delete slotWords[key];
+      }
       return false;
     };
 

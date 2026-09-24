@@ -22,12 +22,9 @@ A full-featured Discord Activity where server members solve a daily crossword (1
 
 ---
 
-## Word List License & Sources
+## Word list license and source
 
-The crossword dictionary is derived from public domain and permissively licensed sources:
-- **12Dicts Word Lists** by Alan Beale (Public Domain).
-- **SCOWL** (Spell Checker Oriented Word Lists) by Kevin Atkinson (MIT / BSD-style permissive license).
-- Words are filtered through a strict offensive blocklist before being admitted to the generator or filler.
+The generator's dictionary is `packages/server/data/xwordlist.txt`, derived from the [Collaborative Word List](https://github.com/Crossword-Nexus/collaborative-word-list) by Crossword Nexus (MIT License). It keeps A-Z entries of 3-15 letters that score 50 or more (about 230,000 words, with offensive entries removed). Attribution, the license text, and refresh instructions are in `packages/server/data/WORDLIST_LICENSE.md`. The loader also rejects offensive words, including profanity inside multi-word phrases.
 
 ---
 

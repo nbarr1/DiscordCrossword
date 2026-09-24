@@ -27,6 +27,8 @@ export interface ClueVerificationResult {
 }
 
 export interface LlmProvider {
+  /** False when the provider can't write real clues (e.g. no API key). */
+  isAvailable?(): boolean;
   proposeTheme(topic?: string): Promise<LlmThemeProposal | null>;
   generateClues(
     entries: ClueEntryInput[],

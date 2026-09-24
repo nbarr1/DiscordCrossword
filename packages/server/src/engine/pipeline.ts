@@ -38,6 +38,12 @@ export class PuzzlePipeline {
       return null;
     }
 
+    // Without an LLM every clue would be a placeholder, which is worse than a hand-clued fallback puzzle.
+    if (this.llm.isAvailable && !this.llm.isAvailable()) {
+      console.warn('[Pipeline] No LLM configured (set GEMINI_API_KEY); skipping generation for', dateStr);
+      return null;
+    }
+
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       console.log(`[Pipeline] Generating puzzle for ${dateStr} (Attempt ${attempt}/${maxRetries})...`);
 
@@ -146,8 +152,8 @@ export class PuzzlePipeline {
         title: themeInfo?.theme || `Daily Crossword (${dateStr})`,
         author: 'Daily Crossword Bot',
         theme: themeInfo?.themeDescription || undefined,
-        width: 15,
-        height: 15,
+        width: grid[0].length,
+        height: grid.length,
         grid: gridMeta,
         clues: {
           across: acrossClues.map(({ answer, ...c }) => c),

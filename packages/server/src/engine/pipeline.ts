@@ -172,32 +172,45 @@ export class PuzzlePipeline {
   }
 
   /**
+   * Upcoming dates the buffer must cover: tomorrow through
+   * BUFFER_DAYS_AHEAD + BUFFER_TARGET_MIN - 1 days out (4 dates with the defaults).
+   * Walking a fixed window, rather than counting buffered rows, means no date is
+   * skipped when a buffered puzzle is published.
+   */
+  public static getBufferTargetDates(now: Date = new Date()): string[] {
+    const horizon = GAME_CONFIG.BUFFER_DAYS_AHEAD + GAME_CONFIG.BUFFER_TARGET_MIN - 1;
+    const dates: string[] = [];
+    for (let offset = 1; offset <= horizon; offset++) {
+      const target = new Date(now);
+      target.setUTCDate(now.getUTCDate() + offset);
+      dates.push(target.toISOString().split('T')[0]);
+    }
+    return dates;
+  }
+
+  /**
    * Maintains the buffer of ready-to-publish puzzles.
    * "generate puzzles at least two days ahead and keep 3-7 ready. If the buffer is empty at release time, publish a fallback puzzle from a small stored set and log a warning."
    */
-  public async maintainBuffer(): Promise<void> {
-    const bufferedPuzzles = await queryAll<{ id: string; date: string }>(
-      `SELECT id, date FROM puzzles WHERE status = 'buffered' ORDER BY date ASC;`
-    );
+  public async maintainBuffer(now: Date = new Date()): Promise<void> {
+    const targetDates = PuzzlePipeline.getBufferTargetDates(now);
 
-    const needed = GAME_CONFIG.BUFFER_TARGET_MIN - bufferedPuzzles.length;
-    if (needed <= 0) {
+    // Rejected (archived) puzzles don't count, so a rejected date gets regenerated.
+    const existing = await queryAll<{ date: string }>(
+      `SELECT date FROM puzzles WHERE status != 'archived' AND date >= ? AND date <= ?;`,
+      [targetDates[0], targetDates[targetDates.length - 1]]
+    );
+    const covered = new Set(existing.map((r) => r.date));
+    const missing = targetDates.filter((d) => !covered.has(d));
+
+    if (missing.length === 0) {
       return;
     }
 
-    console.log(`[Pipeline] Buffer has ${bufferedPuzzles.length} puzzles. Target is ${GAME_CONFIG.BUFFER_TARGET_MIN}-${GAME_CONFIG.BUFFER_TARGET_MAX}. Generating ${needed} more...`);
+    console.log(`[Pipeline] Buffer is missing puzzles for ${missing.join(', ')}. Generating...`);
 
-    // Determine target dates
-    const today = new Date();
-    for (let i = 0; i < needed; i++) {
-      const target = new Date(today);
-      target.setUTCDate(today.getUTCDate() + GAME_CONFIG.BUFFER_DAYS_AHEAD + bufferedPuzzles.length + i);
-      const dateStr = target.toISOString().split('T')[0];
-
-      // Check if date already exists
-      const existing = await queryAll(`SELECT id FROM puzzles WHERE date = ?;`, [dateStr]);
-      if (existing.length > 0) continue;
-
+    for (let i = 0; i < missing.length; i++) {
+      const dateStr = missing[i];
       const puzzle = await this.generatePuzzle(dateStr);
       if (puzzle) {
         await this.savePuzzleToDatabase(puzzle, 'buffered');

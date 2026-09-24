@@ -40,6 +40,10 @@ export async function exchangeDiscordCode(
   const clientSecret = process.env.DISCORD_CLIENT_SECRET;
 
   if (!clientId || !clientSecret) {
+    // The mock session trusts the client-supplied guild, so it must never be reachable in production.
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('Discord OAuth is not configured on the server');
+    }
     console.warn('[Auth] Discord credentials missing in env. Generating development mock session.');
     const mockUser: UserSession = {
       userId: `dev-${claimedGuildId ? 'guild' : 'dm'}-user`,

@@ -12,6 +12,18 @@ import confetti from 'canvas-confetti';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiFetch } from '../discord.js';
 
+/** True when every white cell of the puzzle has a letter. */
+function isGridFilled(grid: string[][], puzzle: ClientPuzzlePayload): boolean {
+  for (let r = 0; r < puzzle.height; r++) {
+    for (let c = 0; c < puzzle.width; c++) {
+      if (!puzzle.grid[r][c].isBlack && !grid[r]?.[c]) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 export function useGame(ready: boolean = true) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -32,6 +44,10 @@ export function useGame(ready: boolean = true) {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   const saveTimerRef = useRef<NodeJS.Timeout | null>(null);
+  // Client clock minus server clock, so the displayed timer matches the server-authoritative one.
+  const clockOffsetMsRef = useRef(0);
+  // Latest grid for async callbacks (reveal) that resolve after further typing.
+  const gridStateRef = useRef<string[][]>([]);
 
   const showToast = useCallback((msg: string) => {
     setToastMessage(msg);
@@ -51,6 +67,8 @@ export function useGame(ready: boolean = true) {
         solution?: string[][];
       }>('/api/puzzle/today');
 
+      clockOffsetMsRef.current =
+        Date.now() - (new Date(data.attempt.startTime).getTime() + data.attempt.elapsedSeconds * 1000);
       setPuzzle(data.puzzle);
       setAttempt(data.attempt);
       setGridState(data.attempt.gridState);
@@ -69,8 +87,8 @@ export function useGame(ready: boolean = true) {
 
       // Find first playable white cell
       let foundFirst = false;
-      for (let r = 0; r < 15; r++) {
-        for (let c = 0; c < 15; c++) {
+      for (let r = 0; r < data.puzzle.height; r++) {
+        for (let c = 0; c < data.puzzle.width; c++) {
           if (!data.puzzle.grid[r][c].isBlack) {
             setSelectedCell({ row: r, col: c });
             foundFirst = true;
@@ -99,12 +117,16 @@ export function useGame(ready: boolean = true) {
 
     const interval = setInterval(() => {
       const start = new Date(attempt.startTime).getTime();
-      const now = Date.now();
-      setElapsedSeconds(Math.floor(Math.max(0, now - start) / 1000));
+      const serverNow = Date.now() - clockOffsetMsRef.current;
+      setElapsedSeconds(Math.floor(Math.max(0, serverNow - start) / 1000));
     }, 1000);
 
     return () => clearInterval(interval);
   }, [attempt, isCompleted]);
+
+  useEffect(() => {
+    gridStateRef.current = gridState;
+  }, [gridState]);
 
   // Auto-save grid state to server
   const triggerAutoSave = useCallback((newGrid: string[][]) => {
@@ -196,17 +218,17 @@ export function useGame(ready: boolean = true) {
 
     if (isAcross) {
       nextC++;
-      while (nextC < 15 && puzzle.grid[nextR][nextC].isBlack) {
+      while (nextC < puzzle.width && puzzle.grid[nextR][nextC].isBlack) {
         nextC++;
       }
     } else {
       nextR++;
-      while (nextR < 15 && puzzle.grid[nextR][nextC].isBlack) {
+      while (nextR < puzzle.height && puzzle.grid[nextR][nextC].isBlack) {
         nextR++;
       }
     }
 
-    if (nextR < 15 && nextC < 15) {
+    if (nextR < puzzle.height && nextC < puzzle.width) {
       setSelectedCell({ row: nextR, col: nextC });
     }
   }, [direction, puzzle, selectedCell]);
@@ -281,6 +303,10 @@ export function useGame(ready: boolean = true) {
 
       if (res.success) {
         setIsCompleted(true);
+        // Show the server's official time rather than the local ticker.
+        if (res.totalScoreSeconds !== undefined) {
+          setElapsedSeconds(res.totalScoreSeconds - res.totalPenaltySeconds);
+        }
         if (res.solution) {
           setSolution(res.solution);
         }
@@ -360,19 +386,23 @@ export function useGame(ready: boolean = true) {
       setPenaltySeconds(res.totalPenaltySeconds);
       setLockedCells((prev) => new Set(prev).add(`${row},${col}`));
 
-      setGridState((prev) => {
-        const next = prev.map((r) => [...r]);
-        next[row][col] = res.letter;
-        triggerAutoSave(next);
-        return next;
-      });
+      const next = gridStateRef.current.map((r) => [...r]);
+      next[row][col] = res.letter;
+      gridStateRef.current = next;
+      setGridState(next);
+      triggerAutoSave(next);
 
       showToast(`🔍 Letter revealed! (+${res.penaltyAdded}s penalty)`);
-      moveToNextCell();
+      // Revealing the last empty square completes the grid, same as typing it.
+      if (isGridFilled(next, puzzle)) {
+        submitGrid(next);
+      } else {
+        moveToNextCell();
+      }
     } catch (err: any) {
       showToast(err.message || 'Reveal letter failed');
     }
-  }, [isCompleted, lockedCells, moveToNextCell, puzzle, selectedCell, showToast, triggerAutoSave]);
+  }, [isCompleted, lockedCells, moveToNextCell, puzzle, selectedCell, showToast, submitGrid, triggerAutoSave]);
 
   // Type letter into current cell
   const enterLetter = useCallback((char: string) => {
@@ -392,18 +422,7 @@ export function useGame(ready: boolean = true) {
     triggerAutoSave(newGrid);
 
     // Auto-check if entire grid is filled now!
-    let allFilled = true;
-    for (let r = 0; r < 15; r++) {
-      for (let c = 0; c < 15; c++) {
-        if (!puzzle.grid[r][c].isBlack && !newGrid[r][c]) {
-          allFilled = false;
-          break;
-        }
-      }
-      if (!allFilled) break;
-    }
-
-    if (allFilled) {
+    if (isGridFilled(newGrid, puzzle)) {
       submitGrid(newGrid);
     } else {
       moveToNextCell();

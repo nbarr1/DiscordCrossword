@@ -169,8 +169,8 @@ export function everyWhiteHasBothDirections(
   grid: boolean[][],
   acrossSlots: GridSlot[],
   downSlots: GridSlot[],
-  width = GAME_CONFIG.GRID_WIDTH,
-  height = GAME_CONFIG.GRID_HEIGHT
+  width: number = GAME_CONFIG.GRID_WIDTH,
+  height: number = GAME_CONFIG.GRID_HEIGHT
 ): boolean {
   const hasAcross = Array.from({ length: height }, () => Array(width).fill(false));
   const hasDown = Array.from({ length: height }, () => Array(width).fill(false));

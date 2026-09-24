@@ -27,6 +27,18 @@ export interface ClientSession {
 let currentSession: ClientSession | null = null;
 let authPromise: Promise<ClientSession> | null = null;
 
+// One SDK instance per page: constructing another would start a second handshake.
+let discordSdk: DiscordSDK | null = null;
+let sdkReady: Promise<void> | null = null;
+
+/**
+ * Discord launches Activities with a `frame_id` query parameter (the SDK constructor
+ * throws without it), so its presence tells us we're inside the Discord client.
+ */
+export function isRunningInDiscord(): boolean {
+  return typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('frame_id');
+}
+
 export function getClientSession(): ClientSession | null {
   return currentSession;
 }
@@ -45,56 +57,59 @@ export function initializeDiscordAuth(): Promise<ClientSession> {
 
   authPromise = (async () => {
     try {
-      const isInsideIframe = typeof window !== 'undefined' && window.self !== window.top;
-
-      if (isInsideIframe && CLIENT_ID) {
-        try {
-          console.log('[DiscordSDK] Connecting to Discord client...');
-          const discordSdk = new DiscordSDK(CLIENT_ID);
-
-          // Add a timeout for the ready() call so non-Discord preview iframes do not hang indefinitely
-          await Promise.race([
-            discordSdk.ready(),
-            new Promise((_, reject) =>
-              setTimeout(() => reject(new Error('Discord SDK ready handshake timeout')), 3000)
-            ),
-          ]);
-
-          const { code } = await discordSdk.commands.authorize({
-            client_id: CLIENT_ID,
-            response_type: 'code',
-            state: '',
-            prompt: 'none',
-            scope: ['identify', 'guilds'],
-          });
-
-          // Exchange code through our server proxy
-          const res = await fetch(formatUrl('/api/auth/token'), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              code,
-              guildId: discordSdk.guildId,
-            }),
-          });
-
-          if (!res.ok) {
-            throw new Error(`Token exchange failed: ${res.status}`);
-          }
-
-          const data: AuthSessionResponse = await res.json();
-          const session: ClientSession = {
-            token: data.token,
-            user: data.user,
-            guildId: data.guildId,
-            isDiscordIframe: true,
-          };
-
-          setClientSession(session);
-          return session;
-        } catch (err) {
-          console.warn('[DiscordSDK] SDK handshake failed or cancelled, using fallback:', err);
+      if (isRunningInDiscord()) {
+        if (!CLIENT_ID) {
+          throw new Error('VITE_DISCORD_CLIENT_ID was not set when the client was built');
         }
+
+        // Inside Discord there is no mock fallback: the server rejects mock logins in production,
+        // and a slow handshake (common on mobile) must not be mistaken for "not in Discord".
+        if (!discordSdk) {
+          discordSdk = new DiscordSDK(CLIENT_ID);
+          sdkReady = discordSdk.ready();
+        }
+        console.log('[DiscordSDK] Connecting to Discord client...');
+        try {
+          await sdkReady;
+        } catch (err) {
+          // Let "Retry Connection" start a fresh handshake.
+          discordSdk = null;
+          sdkReady = null;
+          throw err;
+        }
+
+        const { code } = await discordSdk.commands.authorize({
+          client_id: CLIENT_ID,
+          response_type: 'code',
+          state: '',
+          prompt: 'none',
+          scope: ['identify', 'guilds'],
+        });
+
+        // Exchange code through our server proxy
+        const res = await fetch(formatUrl('/api/auth/token'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            code,
+            guildId: discordSdk.guildId,
+          }),
+        });
+
+        if (!res.ok) {
+          throw new Error(`Token exchange failed: ${res.status}`);
+        }
+
+        const data: AuthSessionResponse = await res.json();
+        const session: ClientSession = {
+          token: data.token,
+          user: data.user,
+          guildId: data.guildId,
+          isDiscordIframe: true,
+        };
+
+        setClientSession(session);
+        return session;
       }
 
       // Standalone dev/browser fallback mode
@@ -134,7 +149,11 @@ export function initializeDiscordAuth(): Promise<ClientSession> {
 /**
  * Wrapper for authenticated API requests passing Bearer token in memory.
  */
-export async function apiFetch<T = any>(endpoint: string, options: RequestInit = {}): Promise<T> {
+export async function apiFetch<T = any>(
+  endpoint: string,
+  options: RequestInit = {},
+  isRetry = false
+): Promise<T> {
   let session = getClientSession();
   if (!session?.token) {
     try {
@@ -157,6 +176,14 @@ export async function apiFetch<T = any>(endpoint: string, options: RequestInit =
     ...options,
     headers,
   });
+
+  // Sessions live in server memory, so a server restart invalidates every token.
+  // Re-authenticate once and retry instead of leaving the player stuck.
+  if (response.status === 401 && session?.token && !isRetry) {
+    setClientSession(null);
+    authPromise = null;
+    return apiFetch<T>(endpoint, options, true);
+  }
 
   if (!response.ok) {
     let errorMsg = `Request failed: ${response.status}`;

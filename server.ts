@@ -4,6 +4,7 @@ import http from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { runMigrations } from './packages/server/src/db/migrations.js';
+import { asyncHandler } from './packages/server/src/api/middleware.js';
 import { apiRouter } from './packages/server/src/api/routes.js';
 import { handleDiscordInteractions } from './packages/server/src/discord/interactions.js';
 import { defaultBotClient } from './packages/server/src/discord/bot.js';
@@ -23,9 +24,7 @@ async function startServer() {
   app.post(
     '/api/interactions',
     express.raw({ type: 'application/json' }),
-    (req, res) => {
-      handleDiscordInteractions(req, res);
-    }
+    asyncHandler(handleDiscordInteractions)
   );
 
   // Standard JSON body parsing for all other /api routes
@@ -33,6 +32,14 @@ async function startServer() {
 
   // Mount API router
   app.use('/api', apiRouter);
+
+  // Errors from async handlers end up here instead of crashing the process.
+  app.use('/api', (err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    console.error('[Server] Unhandled API error:', err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
 
   // Bot commands registration (async in background)
   defaultBotClient.registerCommands().catch((err) => {

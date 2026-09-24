@@ -8,16 +8,27 @@ export async function handleDiscordInteractions(req: Request, res: Response): Pr
   const signature = req.header('X-Signature-Ed25519');
   const timestamp = req.header('X-Signature-Timestamp');
 
-  // Verify signature if public key is configured
-  if (publicKey) {
-    const isValid = verifyDiscordSignature(req.body, signature, timestamp, publicKey);
-    if (!isValid) {
-      res.status(401).send('Invalid request signature');
-      return;
-    }
+  // Discord requires every interaction to be verified. Without a public key, reject
+  // everything rather than trusting forged payloads (e.g. fake member permissions).
+  if (!publicKey) {
+    console.error('[Interactions] DISCORD_PUBLIC_KEY is not set; rejecting interaction.');
+    res.status(401).send('Invalid request signature');
+    return;
   }
 
-  const interaction = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+  // express.raw() hands us a Buffer; the signature covers the exact raw bytes.
+  const rawBody = Buffer.isBuffer(req.body)
+    ? req.body
+    : typeof req.body === 'string'
+      ? Buffer.from(req.body, 'utf-8')
+      : null;
+
+  if (!rawBody || !verifyDiscordSignature(rawBody, signature, timestamp, publicKey)) {
+    res.status(401).send('Invalid request signature');
+    return;
+  }
+
+  const interaction = JSON.parse(rawBody.toString('utf-8'));
 
   // Type 1: PING
   if (interaction.type === 1) {
@@ -174,13 +185,10 @@ export async function handleDiscordInteractions(req: Request, res: Response): Pr
     }
 
     if (name === 'crossword') {
-      // Entry Point Activity launch
-      res.json({
-        type: 4,
-        data: {
-          content: '🎮 Launching Daily Crossword Activity...',
-        },
-      });
+      // Entry Point command. With handler DISCORD_LAUNCH_ACTIVITY (2) Discord launches the
+      // Activity itself and this branch isn't reached; with APP_HANDLER (1) the app must
+      // respond with LAUNCH_ACTIVITY (12).
+      res.json({ type: 12 });
       return;
     }
   }

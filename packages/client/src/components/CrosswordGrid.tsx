@@ -139,10 +139,10 @@ export const CrosswordGrid = forwardRef<CrosswordGridHandle, CrosswordGridProps>
       if (e.key === 'ArrowRight') {
         e.preventDefault();
         let nextC = curCell.col + 1;
-        while (nextC < (curMeta[0]?.length || 15) && curMeta[curCell.row]?.[nextC]?.isBlack) {
+        while (nextC < (curMeta[0]?.length || 0) && curMeta[curCell.row]?.[nextC]?.isBlack) {
           nextC++;
         }
-        if (nextC < (curMeta[0]?.length || 15) && !curMeta[curCell.row]?.[nextC]?.isBlack) {
+        if (nextC < (curMeta[0]?.length || 0) && !curMeta[curCell.row]?.[nextC]?.isBlack) {
           curSelect(curCell.row, nextC);
         }
         curKeyDown?.(e);
@@ -166,9 +166,15 @@ export const CrosswordGrid = forwardRef<CrosswordGridHandle, CrosswordGridProps>
         onKeyDown={(e) => handleKeyDown(e)}
         className="flex flex-col items-center select-none w-full max-w-[540px] focus:outline-none"
       >
-        {/* 15x15 Crossword Table */}
+        {/* Crossword Table (sized from the puzzle, which may not be 15x15) */}
         <div className="w-full aspect-square bg-[#111214] p-1 sm:p-2 rounded-xl shadow-2xl border border-[#2b2d31]">
-          <div className="grid grid-cols-15 grid-rows-15 w-full h-full gap-[1px] sm:gap-[1.5px] bg-[#232428] rounded-lg overflow-hidden border border-[#1f2023]">
+          <div
+            className="grid w-full h-full gap-[1px] sm:gap-[1.5px] bg-[#232428] rounded-lg overflow-hidden border border-[#1f2023]"
+            style={{
+              gridTemplateColumns: `repeat(${gridMeta[0]?.length || 1}, minmax(0, 1fr))`,
+              gridTemplateRows: `repeat(${gridMeta.length || 1}, minmax(0, 1fr))`,
+            }}
+          >
             {gridMeta.map((row, r) =>
               row.map((cell, c) => {
                 const isSelected = selectedCell.row === r && selectedCell.col === c;
@@ -261,8 +267,10 @@ export const CrosswordGrid = forwardRef<CrosswordGridHandle, CrosswordGridProps>
 
         {/* Virtual On-Screen Keyboard Toggle & Realtime Feedback Status */}
         <div className="w-full flex flex-wrap items-center justify-between mt-2.5 px-1 gap-2">
+          {/* The solution only reaches the client after the puzzle is finished (or closed). */}
+          {solution ? (
           <div className="flex items-center gap-2 text-[11px] sm:text-xs">
-            <span className="text-[#949ba4] hidden sm:inline">Realtime check:</span>
+            <span className="text-[#949ba4] hidden sm:inline">Answer check:</span>
             <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-[#ecfdf5] border border-[#a7f3d0] text-[#065f46] font-semibold text-[10px] sm:text-[11px]">
               <span className="w-1.5 h-1.5 rounded-full bg-[#10b981]"></span>
               Correct
@@ -272,6 +280,9 @@ export const CrosswordGrid = forwardRef<CrosswordGridHandle, CrosswordGridProps>
               Incorrect
             </span>
           </div>
+          ) : (
+            <span />
+          )}
           <button
             onClick={() => setShowVirtualKeyboard((prev) => !prev)}
             className="flex items-center gap-1.5 px-2.5 py-1 text-xs rounded bg-[#2b2d31] hover:bg-[#313338] text-[#dbdee1] border border-[#383a40] transition-colors"

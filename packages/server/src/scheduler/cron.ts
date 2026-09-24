@@ -7,6 +7,8 @@ export class DailyScheduler {
   private timer: NodeJS.Timeout | null = null;
   private pipeline: PuzzlePipeline;
   private lastCheckedDate: string = '';
+  // Generation can outlast the 60s interval; overlapping ticks would generate the same dates twice.
+  private running = false;
 
   constructor() {
     this.pipeline = new PuzzlePipeline();
@@ -32,14 +34,24 @@ export class DailyScheduler {
   }
 
   private async tick(): Promise<void> {
-    const todayStr = new Date().toISOString().split('T')[0];
-
-    // Maintain buffer ahead of time
+    if (this.running) return;
+    this.running = true;
     try {
-      await this.pipeline.maintainBuffer();
-    } catch (err) {
-      console.warn('[Scheduler] Buffer maintenance warning:', err);
+      // Release first so the daily rollover isn't delayed by (slow) puzzle generation.
+      await this.releaseDailyPuzzle();
+
+      try {
+        await this.pipeline.maintainBuffer();
+      } catch (err) {
+        console.warn('[Scheduler] Buffer maintenance warning:', err);
+      }
+    } finally {
+      this.running = false;
     }
+  }
+
+  private async releaseDailyPuzzle(): Promise<void> {
+    const todayStr = new Date().toISOString().split('T')[0];
 
     if (this.lastCheckedDate === todayStr) {
       return;

@@ -45,7 +45,7 @@ export const CompletionModal: React.FC<CompletionModalProps> = ({
           </div>
           <h2 className="text-2xl font-black">Puzzle Completed!</h2>
           <p className="text-xs text-white/80 mt-1">
-            You solved the 15x15 daily crossword for {puzzleDate}
+            You solved the daily crossword for {puzzleDate}
           </p>
         </div>
 

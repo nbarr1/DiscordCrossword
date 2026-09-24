@@ -11,7 +11,7 @@
   - *Resolution*: The session token issued by our server is maintained purely in-memory on the client within `currentSession`. Every API request sends `Authorization: Bearer <token>`.
 
 - **Entry Point Command (Primary Entry Point)**:
-  - As described in Discord's Activity Entry Point documentation, Activity launches can occur via the Primary Entry Point command (Type 4) with activity launch handler (Handler 2). We configure both the Primary Entry Point command and a slash command fallback (`/crossword`).
+  - As described in Discord's Activity Entry Point documentation, Activity launches can occur via the Primary Entry Point command (Type 4) with activity launch handler (Handler 2). `/crossword` is registered as that Entry Point command (it replaces the default "Launch" command created when Activities are enabled). With handler 2, Discord launches the Activity itself and the app never receives the interaction; if the handler is switched to `APP_HANDLER` (1), the server answers with `LAUNCH_ACTIVITY` (type 12).
 
 ## 2. Architectural Choices
 

@@ -3,3 +3,4 @@ export * from './types.js';
 export * from './grid.js';
 export * from './validator.js';
 export * from './scoring.js';
+export * from './schedule.js';

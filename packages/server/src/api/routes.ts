@@ -15,8 +15,8 @@ import { z } from 'zod';
 import { queryAll, queryOne, runQuery } from '../db/database.js';
 import { exchangeDiscordCode } from '../discord/auth.js';
 import { defaultBotClient } from '../discord/bot.js';
-import { createFallbackPuzzle } from '../engine/fallbackPuzzles.js';
 import { PuzzlePipeline } from '../engine/pipeline.js';
+import { getOrPublishCurrentPuzzle } from '../engine/puzzleStore.js';
 import { asyncHandler, AuthenticatedRequest, requireAuth } from './middleware.js';
 import { rateLimitCheck, rateLimitReveal, rateLimitSubmit } from './rateLimit.js';
 
@@ -81,69 +81,10 @@ apiRouter.post('/auth/token', asyncHandler(async (req: Request, res: Response): 
 }));
 
 /**
- * Helper to get or publish today's puzzle.
+ * The puzzle that is live right now, published on demand if the scheduler hasn't done it yet.
  */
 export async function getOrPublishTodayPuzzle(): Promise<FullPuzzleData> {
-  const todayStr = new Date().toISOString().split('T')[0];
-
-  // Check if published puzzle exists for today
-  let row = await queryOne<{
-    id: string;
-    date: string;
-    title: string;
-    author: string;
-    theme: string | null;
-    width: number;
-    height: number;
-    grid_json: string;
-    clues_json: string;
-    solution_json: string;
-    status: string;
-    created_at: string;
-  }>(`SELECT * FROM puzzles WHERE date = ? AND status = 'published';`, [todayStr]);
-
-  if (!row) {
-    // Check if there is a buffered puzzle for today
-    row = await queryOne(`SELECT * FROM puzzles WHERE date = ? AND status = 'buffered';`, [todayStr]);
-
-    if (row) {
-      await runQuery(`UPDATE puzzles SET status = 'published' WHERE id = ?;`, [row.id]);
-    } else {
-      // Use fallback puzzle
-      console.warn(`[API Puzzle] Buffer empty for ${todayStr}. Publishing fallback puzzle.`);
-      const fallback = createFallbackPuzzle(todayStr, 0);
-      const pipeline = new PuzzlePipeline();
-      await pipeline.savePuzzleToDatabase(fallback, 'published');
-      return fallback;
-    }
-  }
-
-  const expiresDate = new Date(`${row.date}T00:00:00Z`);
-  expiresDate.setUTCDate(expiresDate.getUTCDate() + 1);
-
-  const clues = JSON.parse(row.clues_json);
-  const solution = JSON.parse(row.solution_json);
-
-  return {
-    id: row.id,
-    date: row.date,
-    title: row.title,
-    author: row.author,
-    theme: row.theme || undefined,
-    width: row.width,
-    height: row.height,
-    grid: JSON.parse(row.grid_json),
-    clues: {
-      across: (clues.across || []).map(({ answer, ...rest }: any) => rest),
-      down: (clues.down || []).map(({ answer, ...rest }: any) => rest),
-    },
-    cluesWithAnswers: clues,
-    solution,
-    expiresAt: expiresDate.toISOString(),
-    isClosed: new Date().getTime() >= expiresDate.getTime(),
-    status: 'published',
-    createdAt: row.created_at,
-  };
+  return getOrPublishCurrentPuzzle();
 }
 
 /**

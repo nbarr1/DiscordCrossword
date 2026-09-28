@@ -10,11 +10,9 @@ export const GAME_CONFIG = {
   MIN_WORD_LENGTH: 3,
   MAX_ENTRIES: 78,
 
-  // Timing & Schedule
+  // Daily release time (UTC). Each puzzle is live from its release until the next day's release.
   RELEASE_HOUR_UTC: 0,
   RELEASE_MINUTE_UTC: 0,
-  PUZZLE_DURATION_HOURS: 24,
-  DEFAULT_TIMEZONE: 'UTC',
 
   // Penalties (in seconds)
   CHECK_WORD_PENALTY_SECONDS: 30,
@@ -23,10 +21,12 @@ export const GAME_CONFIG = {
 
   // Generation & Solver
   SOLVER_TIME_BUDGET_MS: 3500,
+  // Puzzles are kept ready for tomorrow through BUFFER_DAYS_AHEAD + BUFFER_TARGET_MIN - 1 days out.
   BUFFER_TARGET_MIN: 3,
-  BUFFER_TARGET_MAX: 7,
   BUFFER_DAYS_AHEAD: 2,
   MAX_PIPELINE_RETRIES: 4,
+  // An LLM request that takes longer than this is abandoned, so a hung call can't stall generation.
+  LLM_REQUEST_TIMEOUT_MS: 120 * 1000,
 
   // Rate Limiting (per user window)
   RATE_LIMIT_CHECK_WINDOW_MS: 60 * 1000,

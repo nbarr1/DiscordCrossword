@@ -3,6 +3,9 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "workspaces": [
     "packages/*"
   ],
@@ -28,7 +31,6 @@
     "motion": "^12.23.24",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
-    "sql.js": "^1.14.2",
     "tweetnacl": "^1.0.3",
     "vite": "^8.3.0",
     "zod": "^4.6.5"
@@ -39,7 +41,6 @@
     "@types/node": "^22.14.0",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "@types/sql.js": "^1.4.11",
     "autoprefixer": "^10.4.21",
     "esbuild": "^0.28.0",
     "tailwindcss": "^4.3.3",

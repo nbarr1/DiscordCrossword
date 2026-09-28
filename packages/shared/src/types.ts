@@ -41,7 +41,7 @@ export interface ClientPuzzlePayload {
 }
 
 export interface FullPuzzleData extends ClientPuzzlePayload {
-  solution: string[][]; // 15x15 uppercase chars, '#' for black cells
+  solution: string[][]; // height x width uppercase chars, '#' for black cells
   cluesWithAnswers: {
     across: ClueWithAnswer[];
     down: ClueWithAnswer[];
@@ -61,12 +61,28 @@ export interface AttemptState {
   penaltySeconds: number; // Accumulated penalty
   totalScoreSeconds: number; // elapsed + penalty
   isCompleted: boolean;
-  gridState: string[][]; // 15x15 player letters or empty string ''
+  gridState: string[][]; // height x width player letters or empty string ''
   lockedCells: { row: number; col: number }[]; // Correct cells checked or revealed
   wrongAnswersPerEntry: Record<string, string[]>; // entryKey (e.g. '1-across') -> distinct wrong attempts
 }
 
-export interface CheckWordRequest {
+/**
+ * Every attempt request names the puzzle it was made against. When that puzzle is no longer the
+ * live one, the server answers 409 with `code: 'PUZZLE_CLOSED'` instead of applying the action to
+ * the new day's puzzle.
+ */
+export interface AttemptRequestBase {
+  puzzleId: string;
+}
+
+export type ApiErrorCode = 'PUZZLE_CLOSED' | 'ATTEMPT_FINISHED' | 'ATTEMPT_NOT_FOUND' | 'INVALID_GRID';
+
+export interface ApiErrorResponse {
+  error: string;
+  code?: ApiErrorCode;
+}
+
+export interface CheckWordRequest extends AttemptRequestBase {
   entryNumber: number;
   direction: Direction;
   word: string;
@@ -81,7 +97,7 @@ export interface CheckWordResponse {
   isFirstTimeWrong?: boolean;
 }
 
-export interface RevealLetterRequest {
+export interface RevealLetterRequest extends AttemptRequestBase {
   row: number;
   col: number;
 }
@@ -94,7 +110,7 @@ export interface RevealLetterResponse {
   totalPenaltySeconds: number;
 }
 
-export interface SubmitGridRequest {
+export interface SubmitGridRequest extends AttemptRequestBase {
   gridState: string[][];
 }
 
@@ -108,7 +124,7 @@ export interface SubmitGridResponse {
   solution?: string[][]; // Included only if completed successfully
 }
 
-export interface SaveProgressRequest {
+export interface SaveProgressRequest extends AttemptRequestBase {
   gridState: string[][];
 }
 

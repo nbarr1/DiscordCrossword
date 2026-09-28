@@ -24,8 +24,10 @@
 - **Anti-Cheat Payload Sanitization**:
   - Under no circumstances are puzzle answers sent to the client during active gameplay. The `/api/puzzle/today` endpoint strips answer keys from clues and solution grids. Word checking and letter reveals are evaluated server-side. Solutions are only provided after the player completes the puzzle or the puzzle closes.
 
-- **SQLite Database with sql.js Engine**:
-  - In cloud/container environments where native C++ compilation (`node-gyp` for `better-sqlite3`) may fail due to platform toolchain differences, `sql.js` (WebAssembly SQLite) provides 100% compliant SQL with robust file persistence and zero native compile dependencies.
+- **SQLite Database with Node's Built-in `node:sqlite`**:
+  - Native modules such as `better-sqlite3` need `node-gyp` and a C++ toolchain, which some cloud and container environments lack. `node:sqlite` ships with Node.js (no flag needed from 22.13), so there's nothing to compile.
+  - It opens the database file itself, in WAL mode with a busy timeout. The server and the CLI can use the same file at once, each write is committed through SQLite's journal, and a crash can't leave a half-written file. (The earlier `sql.js` engine kept the database in memory and rewrote the whole file on every write, so CLI changes made while the server ran were overwritten.)
+  - Node marks the module as experimental and prints an `ExperimentalWarning` once at startup; that warning is expected.
 
 - **Backtracking Constraint Solver with MRV & Quality Scoring**:
   - The puzzle filler uses Minimum Remaining Values (MRV) heuristic: at each step, it chooses the slot with the fewest remaining valid candidates in the dictionary.

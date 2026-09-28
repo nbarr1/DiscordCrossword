@@ -1,18 +1,63 @@
 import {
+  addDays,
+  buildGridMeta,
   ClientPuzzlePayload,
+  computeGridSlots,
   FullPuzzleData,
   GAME_CONFIG,
-  buildGridMeta,
-  computeGridSlots,
-  validateGridTemplate,
+  getPuzzleDate,
+  getPuzzleExpiry,
+  GridSlot,
 } from '@crossword/shared';
-import { queryAll, runQuery } from '../db/database.js';
+import { queryAll } from '../db/database.js';
+import { clueRevealsAnswer } from '../llm/clueQuality.js';
 import { defaultLlmProvider } from '../llm/gemini.js';
-import { LlmProvider } from '../llm/types.js';
-import { createFallbackPuzzle } from './fallbackPuzzles.js';
+import { ClueEntryInput, LlmProvider, LlmThemeProposal } from '../llm/types.js';
+import { getFallbackPuzzle } from './fallbackPuzzles.js';
 import { CrosswordFiller } from './filler.js';
+import { PuzzleStatus, savePuzzle } from './puzzleStore.js';
 import { getValidatedTemplates } from './templates.js';
-import { defaultDictionary } from './wordlist.js';
+import { defaultDictionary, isOffensive } from './wordlist.js';
+
+// Theme entries go in across slots at least this long, so they stand out from the rest of the fill.
+const MIN_THEME_ENTRY_LENGTH = 5;
+// A theme needs at least this many entries in the grid, or the title would promise more than the puzzle has.
+const MIN_THEME_ENTRIES = 2;
+
+export interface ThemeSeed {
+  number: number;
+  direction: 'across' | 'down';
+  word: string;
+  clueHint: string;
+}
+
+/**
+ * Assigns theme words to across slots of the same length, longest word first. Across slots never
+ * share cells, so seeds can't conflict with each other. Words that don't fit are dropped.
+ */
+export function placeThemeEntries(slots: GridSlot[], words: { word: string; clueHint: string }[]): ThemeSeed[] {
+  const placed: ThemeSeed[] = [];
+  const candidates = words
+    .map((w) => ({ word: w.word.toUpperCase().replace(/[^A-Z]/g, ''), clueHint: w.clueHint }))
+    .filter((w) => w.word.length >= MIN_THEME_ENTRY_LENGTH && !isOffensive(w.word))
+    .sort((a, b) => b.word.length - a.word.length);
+
+  for (const { word, clueHint } of candidates) {
+    if (placed.some((p) => p.word === word)) continue;
+    const slot = slots.find(
+      (s) =>
+        s.direction === 'across' &&
+        s.length === word.length &&
+        !placed.some((p) => p.number === s.number && p.direction === s.direction)
+    );
+    if (slot) {
+      placed.push({ number: slot.number, direction: slot.direction, word, clueHint });
+    }
+  }
+  return placed;
+}
+
+const entryKey = (e: { number: number; direction: string }) => `${e.number}-${e.direction}`;
 
 export class PuzzlePipeline {
   private llm: LlmProvider;
@@ -24,7 +69,8 @@ export class PuzzlePipeline {
   }
 
   /**
-   * Generates a single complete crossword puzzle for a given target date.
+   * Generates a single complete crossword puzzle for a given target date, or returns null when
+   * every attempt fails (no fill, or the LLM couldn't supply a usable clue for every entry).
    */
   public async generatePuzzle(
     dateStr: string,
@@ -48,28 +94,23 @@ export class PuzzlePipeline {
       console.log(`[Pipeline] Generating puzzle for ${dateStr} (Attempt ${attempt}/${maxRetries})...`);
 
       // 1. Pick a template
-      const templateIdx = Math.floor(Math.random() * templates.length);
-      const grid = templates[templateIdx];
+      const grid = templates[Math.floor(Math.random() * templates.length)];
+      const { cellNumbers, acrossSlots, downSlots } = computeGridSlots(grid);
+      const allSlots = [...acrossSlots, ...downSlots];
 
-      // 2. Propose theme (optional)
-      let themeInfo = null;
-      let seedEntries: { number: number; direction: 'across' | 'down'; word: string }[] = [];
+      // 2. Propose a theme and place its entries (optional)
+      let theme = await this.proposeTheme(allSlots, options.themePrompt);
 
-      try {
-        themeInfo = await this.llm.proposeTheme(options.themePrompt);
-      } catch (err) {
-        console.warn('[Pipeline] Theme proposal skipped:', err);
-      }
-
-      // 3. Fill grid (with fallback to themeless fill)
-      let fillResult = this.filler.fill(grid, {
+      // 3. Fill the grid around the theme entries, falling back to a themeless fill
+      let fillResult = await this.filler.fill(grid, {
         timeBudgetMs: GAME_CONFIG.SOLVER_TIME_BUDGET_MS,
-        seedEntries,
+        seedEntries: theme?.seeds,
       });
 
-      if (!fillResult.success && seedEntries.length > 0) {
+      if (!fillResult.success && theme) {
         console.log('[Pipeline] Themed fill failed time budget, falling back to themeless fill...');
-        fillResult = this.filler.fill(grid, {
+        theme = null;
+        fillResult = await this.filler.fill(grid, {
           timeBudgetMs: GAME_CONFIG.SOLVER_TIME_BUDGET_MS,
         });
       }
@@ -79,82 +120,49 @@ export class PuzzlePipeline {
         continue;
       }
 
-      // 4. Validation gate on grid
-      const gridValidation = validateGridTemplate(grid);
-      if (!gridValidation.valid) {
-        console.warn(`[Pipeline] Grid template validation failed:`, gridValidation.errors);
+      const solution = fillResult.solution;
+      const themeHints = new Map(theme?.seeds.map((s) => [entryKey(s), s.clueHint]));
+      const entries: ClueEntryInput[] = allSlots.map((s) => ({
+        number: s.number,
+        direction: s.direction,
+        answer: s.cells.map((c) => solution[c.row][c.col]).join(''),
+        length: s.length,
+        themeHint: themeHints.get(entryKey(s)),
+      }));
+
+      // 4. Clue every entry; a puzzle with missing clues is discarded, never published with placeholders
+      let clues: Record<string, string> | null;
+      try {
+        clues = await this.writeClues(entries);
+      } catch (err) {
+        console.warn(`[Pipeline] Clue generation failed on attempt ${attempt}:`, err);
+        continue;
+      }
+      if (!clues) {
         continue;
       }
 
-      // Compute slots & clues
-      const { cellNumbers, acrossSlots, downSlots } = computeGridSlots(grid);
-      const gridMeta = buildGridMeta(grid, cellNumbers);
-
-      const clueEntriesForLlm = [
-        ...acrossSlots.map((s) => ({
-          number: s.number,
-          direction: 'across' as const,
-          answer: fillResult.slotWords[`${s.number}-across`] || s.cells.map((c) => fillResult.solution![c.row][c.col]).join(''),
-          length: s.length,
-        })),
-        ...downSlots.map((s) => ({
-          number: s.number,
-          direction: 'down' as const,
-          answer: fillResult.slotWords[`${s.number}-down`] || s.cells.map((c) => fillResult.solution![c.row][c.col]).join(''),
-          length: s.length,
-        })),
-      ];
-
-      // 5. Generate clues via LLM
-      const cluesMap = await this.llm.generateClues(clueEntriesForLlm, 'medium');
-
-      // 6. Second pass: verify clues
-      const verifyItems = clueEntriesForLlm.map((e) => ({
-        number: e.number,
-        direction: e.direction,
-        answer: e.answer,
-        clue: cluesMap[`${e.number}-${e.direction}`] || `Clue for ${e.number}-${e.direction}`,
-      }));
-
-      const verifications = await this.llm.verifyClues(verifyItems);
-      for (const v of verifications) {
-        if (!v.valid && v.replacementClue) {
-          cluesMap[`${v.number}-${v.direction}`] = v.replacementClue;
-        }
-      }
-
-      const acrossClues = acrossSlots.map((s) => ({
+      const toClue = (s: GridSlot) => ({
         number: s.number,
-        direction: 'across' as const,
-        text: cluesMap[`${s.number}-across`] || `Clue for ${s.number}-Across`,
+        direction: s.direction,
+        text: clues![entryKey(s)],
         row: s.row,
         col: s.col,
         length: s.length,
-        answer: fillResult.slotWords[`${s.number}-across`] || s.cells.map((c) => fillResult.solution![c.row][c.col]).join(''),
-      }));
+        answer: s.cells.map((c) => solution[c.row][c.col]).join(''),
+      });
+      const acrossClues = acrossSlots.map(toClue);
+      const downClues = downSlots.map(toClue);
 
-      const downClues = downSlots.map((s) => ({
-        number: s.number,
-        direction: 'down' as const,
-        text: cluesMap[`${s.number}-down`] || `Clue for ${s.number}-Down`,
-        row: s.row,
-        col: s.col,
-        length: s.length,
-        answer: fillResult.slotWords[`${s.number}-down`] || s.cells.map((c) => fillResult.solution![c.row][c.col]).join(''),
-      }));
-
-      const expiresDate = new Date(`${dateStr}T00:00:00Z`);
-      expiresDate.setUTCDate(expiresDate.getUTCDate() + 1);
-
-      const puzzle: FullPuzzleData = {
+      return {
         id: `puzzle-${dateStr}-${Date.now().toString(36)}`,
         date: dateStr,
-        title: themeInfo?.theme || `Daily Crossword (${dateStr})`,
+        title: theme?.proposal.theme || `Daily Crossword (${dateStr})`,
         author: 'Daily Crossword Bot',
-        theme: themeInfo?.themeDescription || undefined,
+        theme: theme?.proposal.themeDescription || undefined,
         width: grid[0].length,
         height: grid.length,
-        grid: gridMeta,
+        grid: buildGridMeta(grid, cellNumbers),
         clues: {
           across: acrossClues.map(({ answer, ...c }) => c),
           down: downClues.map(({ answer, ...c }) => c),
@@ -163,18 +171,90 @@ export class PuzzlePipeline {
           across: acrossClues,
           down: downClues,
         },
-        solution: fillResult.solution,
-        expiresAt: expiresDate.toISOString(),
+        solution,
+        expiresAt: getPuzzleExpiry(dateStr).toISOString(),
         isClosed: false,
         status: 'buffered',
         createdAt: new Date().toISOString(),
       };
-
-      return puzzle;
     }
 
     console.warn(`[Pipeline] Could not generate puzzle after ${maxRetries} attempts`);
     return null;
+  }
+
+  /**
+   * Asks the LLM for a theme whose entries fit this grid's long across slots and places them.
+   * Returns null for a themeless puzzle.
+   */
+  private async proposeTheme(
+    slots: GridSlot[],
+    topic?: string
+  ): Promise<{ proposal: LlmThemeProposal; seeds: ThemeSeed[] } | null> {
+    const entryLengths = [
+      ...new Set(slots.filter((s) => s.direction === 'across' && s.length >= MIN_THEME_ENTRY_LENGTH).map((s) => s.length)),
+    ].sort((a, b) => b - a);
+    if (entryLengths.length === 0) return null;
+
+    let proposal: LlmThemeProposal | null = null;
+    try {
+      proposal = await this.llm.proposeTheme({ topic, entryLengths });
+    } catch (err) {
+      console.warn('[Pipeline] Theme proposal skipped:', err);
+    }
+    if (!proposal) return null;
+
+    const seeds = placeThemeEntries(slots, proposal.seedEntries);
+    if (seeds.length < MIN_THEME_ENTRIES) {
+      console.log(`[Pipeline] Only ${seeds.length} theme entries fit the grid; making a themeless puzzle.`);
+      return null;
+    }
+    return { proposal, seeds };
+  }
+
+  /**
+   * Returns a usable clue for every entry, or null when some entries still lack one after a
+   * second request. Rejects when the LLM request itself fails.
+   */
+  private async writeClues(entries: ClueEntryInput[]): Promise<Record<string, string> | null> {
+    const clues = await this.llm.generateClues(entries, 'medium');
+
+    // A second opinion. If verification can't run, the generated clues (already screened for
+    // giveaways) stand.
+    const toVerify = entries
+      .filter((e) => clues[entryKey(e)])
+      .map((e) => ({ number: e.number, direction: e.direction, answer: e.answer, clue: clues[entryKey(e)] }));
+    try {
+      for (const v of await this.llm.verifyClues(toVerify)) {
+        const entry = entries.find((e) => entryKey(e) === entryKey(v));
+        if (v.valid || !entry) continue;
+        if (v.replacementClue && !clueRevealsAnswer(v.replacementClue, entry.answer)) {
+          clues[entryKey(v)] = v.replacementClue;
+        } else {
+          delete clues[entryKey(v)];
+        }
+      }
+    } catch (err) {
+      console.warn('[Pipeline] Clue verification unavailable; keeping the generated clues:', err);
+    }
+
+    let missing = entries.filter((e) => !clues[entryKey(e)]);
+    if (missing.length > 0) {
+      const retry = await this.llm.generateClues(missing, 'medium');
+      for (const e of missing) {
+        const clue = retry[entryKey(e)];
+        if (clue && !clueRevealsAnswer(clue, e.answer)) {
+          clues[entryKey(e)] = clue;
+        }
+      }
+      missing = entries.filter((e) => !clues[entryKey(e)]);
+    }
+
+    if (missing.length > 0) {
+      console.warn(`[Pipeline] No usable clue for ${missing.map(entryKey).join(', ')}; discarding this fill.`);
+      return null;
+    }
+    return clues;
   }
 
   /**
@@ -185,11 +265,10 @@ export class PuzzlePipeline {
    */
   public static getBufferTargetDates(now: Date = new Date()): string[] {
     const horizon = GAME_CONFIG.BUFFER_DAYS_AHEAD + GAME_CONFIG.BUFFER_TARGET_MIN - 1;
+    const today = getPuzzleDate(now);
     const dates: string[] = [];
     for (let offset = 1; offset <= horizon; offset++) {
-      const target = new Date(now);
-      target.setUTCDate(now.getUTCDate() + offset);
-      dates.push(target.toISOString().split('T')[0]);
+      dates.push(addDays(today, offset));
     }
     return dates;
   }
@@ -202,7 +281,7 @@ export class PuzzlePipeline {
     const targetDates = PuzzlePipeline.getBufferTargetDates(now);
 
     // Rejected (archived) puzzles don't count, so a rejected date gets regenerated.
-    const existing = await queryAll<{ date: string }>(
+    const existing = queryAll<{ date: string }>(
       `SELECT date FROM puzzles WHERE status != 'archived' AND date >= ? AND date <= ?;`,
       [targetDates[0], targetDates[targetDates.length - 1]]
     );
@@ -215,41 +294,19 @@ export class PuzzlePipeline {
 
     console.log(`[Pipeline] Buffer is missing puzzles for ${missing.join(', ')}. Generating...`);
 
-    for (let i = 0; i < missing.length; i++) {
-      const dateStr = missing[i];
+    for (const dateStr of missing) {
       const puzzle = await this.generatePuzzle(dateStr);
       if (puzzle) {
-        await this.savePuzzleToDatabase(puzzle, 'buffered');
+        this.savePuzzleToDatabase(puzzle, 'buffered');
       } else {
         console.warn(`[Pipeline] Failed to generate buffered puzzle for ${dateStr}, using fallback puzzle buffer entry.`);
-        const fallback = createFallbackPuzzle(dateStr, i);
-        fallback.status = 'buffered';
-        await this.savePuzzleToDatabase(fallback, 'buffered');
+        this.savePuzzleToDatabase(getFallbackPuzzle(dateStr), 'buffered');
       }
     }
   }
 
-  public async savePuzzleToDatabase(puzzle: FullPuzzleData, status: 'buffered' | 'published' | 'archived'): Promise<void> {
-    await runQuery(
-      `INSERT OR REPLACE INTO puzzles (
-        id, date, title, author, theme, width, height,
-        grid_json, clues_json, solution_json, status, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
-      [
-        puzzle.id,
-        puzzle.date,
-        puzzle.title,
-        puzzle.author,
-        puzzle.theme || null,
-        puzzle.width,
-        puzzle.height,
-        JSON.stringify(puzzle.grid),
-        JSON.stringify(puzzle.cluesWithAnswers),
-        JSON.stringify(puzzle.solution),
-        status,
-        puzzle.createdAt,
-      ]
-    );
+  public savePuzzleToDatabase(puzzle: FullPuzzleData, status: PuzzleStatus): void {
+    savePuzzle(puzzle, status);
   }
 
   /**

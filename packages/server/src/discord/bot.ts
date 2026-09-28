@@ -1,5 +1,6 @@
-import { formatTime, LeaderboardEntry } from '@crossword/shared';
-import { queryAll, queryOne, runQuery } from '../db/database.js';
+import { formatTime } from '@crossword/shared';
+import { queryAll, queryOne } from '../db/database.js';
+import { escapeMarkdown, formatPenalty, formatLeaderboardLines, getGuildLeaderboard } from '../leaderboard.js';
 
 export class DiscordBotClient {
   private botToken: string;
@@ -112,7 +113,7 @@ export class DiscordBotClient {
    * Posts completion announcement if server setting enables it.
    */
   public async announceSolve(guildId: string, playerName: string, finalTimeSeconds: number, penalties: number): Promise<void> {
-    const config = await queryOne<{ leaderboard_channel_id: string; announce_solves: number }>(
+    const config = queryOne<{ leaderboard_channel_id: string; announce_solves: number }>(
       `SELECT leaderboard_channel_id, announce_solves FROM guild_config WHERE guild_id = ?;`,
       [guildId]
     );
@@ -121,11 +122,8 @@ export class DiscordBotClient {
       return;
     }
 
-    const timeStr = formatTime(finalTimeSeconds);
-    const penaltyText = penalties > 0 ? ` (+${penalties}s penalties)` : '';
-
     await this.sendMessage(config.leaderboard_channel_id, {
-      content: `🎉 **${playerName}** just solved today's Daily Crossword in **${timeStr}**${penaltyText}!`,
+      content: `🎉 **${escapeMarkdown(playerName)}** just solved today's Daily Crossword in **${formatTime(finalTimeSeconds)}**${formatPenalty(penalties)}!`,
     });
   }
 
@@ -133,72 +131,27 @@ export class DiscordBotClient {
    * Posts the final closing leaderboard to all configured servers.
    */
   public async postDailyLeaderboards(puzzleId: string, dateStr: string): Promise<void> {
-    const guilds = await queryAll<{ guild_id: string; leaderboard_channel_id: string }>(
+    const guilds = queryAll<{ guild_id: string; leaderboard_channel_id: string }>(
       `SELECT guild_id, leaderboard_channel_id FROM guild_config WHERE leaderboard_channel_id IS NOT NULL;`
     );
 
     for (const g of guilds) {
-      const rows = await queryAll<{
-        display_name: string;
-        username: string;
-        start_time: string;
-        finish_time: string;
-        penalty_seconds: number;
-      }>(
-        `SELECT p.display_name, p.username, a.start_time, a.finish_time, a.penalty_seconds
-         FROM attempts a
-         JOIN players p ON a.user_id = p.user_id
-         WHERE a.guild_id = ? AND a.puzzle_id = ? AND a.finish_time IS NOT NULL;`,
-        [g.guild_id, puzzleId]
-      );
-
-      if (rows.length === 0) {
+      const entries = getGuildLeaderboard(g.guild_id, puzzleId);
+      if (entries.length === 0) {
         continue;
       }
 
-      // Compute and sort
-      const entries: LeaderboardEntry[] = rows.map((r, idx) => {
-        const elapsed = Math.floor(
-          (new Date(r.finish_time).getTime() - new Date(r.start_time).getTime()) / 1000
-        );
-        const total = elapsed + r.penalty_seconds;
-        return {
-          rank: 0,
-          userId: '',
-          username: r.username,
-          displayName: r.display_name,
-          finishTime: r.finish_time,
-          elapsedSeconds: elapsed,
-          penaltySeconds: r.penalty_seconds,
-          totalScoreSeconds: total,
-        };
-      });
-
-      entries.sort((a, b) => {
-        if (a.totalScoreSeconds !== b.totalScoreSeconds) {
-          return a.totalScoreSeconds - b.totalScoreSeconds;
-        }
-        return new Date(a.finishTime).getTime() - new Date(b.finishTime).getTime();
-      });
-
-      const medals = ['🥇', '🥈', '🥉'];
-      const lines = entries.slice(0, 10).map((e, idx) => {
-        const medal = medals[idx] || `**#${idx + 1}**`;
-        const penaltyInfo = e.penaltySeconds > 0 ? ` (${formatTime(e.penaltySeconds)} penalties)` : '';
-        return `${medal} **${e.displayName}** — \`${formatTime(e.totalScoreSeconds)}\`${penaltyInfo}`;
-      });
-
-      const embed = {
-        title: `🏆 Daily Crossword Results — ${dateStr}`,
-        description: lines.join('\n'),
-        color: 0x5865f2,
-        footer: {
-          text: `Total solvers: ${entries.length}`,
-        },
-      };
-
       await this.sendMessage(g.leaderboard_channel_id, {
-        embeds: [embed],
+        embeds: [
+          {
+            title: `🏆 Daily Crossword Results — ${dateStr}`,
+            description: formatLeaderboardLines(entries).join('\n'),
+            color: 0x5865f2,
+            footer: {
+              text: `Total solvers: ${entries.length}`,
+            },
+          },
+        ],
       });
     }
   }

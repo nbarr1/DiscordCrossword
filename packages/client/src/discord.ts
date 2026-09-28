@@ -83,7 +83,8 @@ export function initializeDiscordAuth(): Promise<ClientSession> {
           response_type: 'code',
           state: '',
           prompt: 'none',
-          scope: ['identify', 'guilds'],
+          // guilds.members.read lets the server confirm the player belongs to this server.
+          scope: ['identify', 'guilds.members.read'],
         });
 
         // Exchange code through our server proxy

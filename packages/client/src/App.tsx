@@ -1,12 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ClueList } from '../packages/client/src/components/ClueList.js';
-import { CompletionModal } from '../packages/client/src/components/CompletionModal.js';
-import { CrosswordGrid, CrosswordGridHandle } from '../packages/client/src/components/CrosswordGrid.js';
-import { HeaderBar } from '../packages/client/src/components/HeaderBar.js';
-import { HowToPlayModal } from '../packages/client/src/components/HowToPlayModal.js';
-import { LeaderboardModal } from '../packages/client/src/components/LeaderboardModal.js';
-import { ClientSession, initializeDiscordAuth } from '../packages/client/src/discord.js';
-import { useGame } from '../packages/client/src/hooks/useGame.js';
+import { ClueList } from './components/ClueList.js';
+import { CompletionModal } from './components/CompletionModal.js';
+import { CrosswordGrid, CrosswordGridHandle } from './components/CrosswordGrid.js';
+import { HeaderBar } from './components/HeaderBar.js';
+import { HowToPlayModal } from './components/HowToPlayModal.js';
+import { LeaderboardModal } from './components/LeaderboardModal.js';
+import { ClientSession, initializeDiscordAuth } from './discord.js';
+import { useGame } from './hooks/useGame.js';
 
 export default function App() {
   const [session, setSession] = useState<ClientSession | null>(null);
@@ -31,27 +31,35 @@ export default function App() {
 
   const game = useGame(!authLoading);
 
-  // Global keyboard event listener in App component to handle arrow key navigation and Tab / Shift+Tab clue switching
+  // Latest game state for the key listener, which is registered once.
+  const gameRef = useRef(game);
+  gameRef.current = game;
+  const modalOpen = showLeaderboard || showHelp || showCompletion;
+
+  // The app's only keyboard listener: typing, Backspace, arrow keys, and Tab / Shift+Tab.
+  // Keys are ignored while a modal is open, while a text field has focus, and when Ctrl, Cmd,
+  // or Alt is held, so browser and Discord shortcuts keep working.
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
-      // Ignore when modal is open or focusing input/textarea
       if (
-        showLeaderboard ||
-        showHelp ||
-        showCompletion ||
+        modalOpen ||
+        e.ctrlKey ||
+        e.metaKey ||
+        e.altKey ||
         e.target instanceof HTMLInputElement ||
         e.target instanceof HTMLTextAreaElement
       ) {
         return;
       }
 
-      const isArrowKey = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key);
-      const isTabKey = e.key === 'Tab';
-
-      if (isArrowKey || isTabKey) {
-        e.preventDefault();
-        // Pass these events directly to the CrosswordGrid component
+      if (e.key === 'Tab' || e.key.startsWith('Arrow')) {
         gridRef.current?.handleKeyDown(e);
+      } else if (e.key === 'Backspace') {
+        e.preventDefault();
+        gameRef.current.handleBackspace();
+      } else if (/^[a-zA-Z]$/.test(e.key)) {
+        e.preventDefault();
+        gameRef.current.enterLetter(e.key);
       }
     };
 
@@ -59,7 +67,7 @@ export default function App() {
     return () => {
       window.removeEventListener('keydown', handleGlobalKeyDown);
     };
-  }, [showLeaderboard, showHelp, showCompletion]);
+  }, [modalOpen]);
 
   // Automatically show completion modal when solved
   useEffect(() => {
@@ -125,16 +133,41 @@ export default function App() {
         penaltySeconds={game.penaltySeconds}
         totalScoreSeconds={game.totalScoreSeconds}
         isCompleted={game.isCompleted}
+        isClosed={game.isClosed}
         isActiveEntryFull={game.isActiveEntryFull}
+        isGridFull={game.isGridFull}
         onCheckWord={game.checkWord}
         onRevealLetter={game.revealLetter}
+        onSubmit={game.submitGrid}
         onOpenLeaderboard={() => setShowLeaderboard(true)}
         onOpenHelp={() => setShowHelp(true)}
       />
 
+      {game.isClosed && (
+        <div
+          role="status"
+          className="bg-[#f0b232]/15 border-b border-[#f0b232]/40 px-4 py-2.5 flex flex-wrap items-center justify-center gap-3 text-sm text-[#f2f3f5]"
+        >
+          <span>
+            {game.isCompleted
+              ? 'This puzzle has closed. A new crossword is out.'
+              : 'This puzzle closed before you finished. A new crossword is out.'}
+          </span>
+          <button
+            onClick={() => {
+              setShowCompletion(false);
+              game.reload();
+            }}
+            className="px-3 py-1 rounded-md bg-[#5865f2] hover:bg-[#4752c4] text-white text-xs font-bold"
+          >
+            Load Today’s Puzzle
+          </button>
+        </div>
+      )}
+
       {/* Floating Toast notification */}
       {game.toastMessage && (
-        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 bg-[#2b2d31] text-white border border-[#383a40] px-4 py-2 rounded-xl shadow-xl text-xs font-semibold animate-in fade-in slide-in-from-top-2 flex items-center gap-2">
+        <div className={`fixed ${game.isClosed ? 'top-28' : 'top-16'} left-1/2 -translate-x-1/2 z-50 bg-[#2b2d31] text-white border border-[#383a40] px-4 py-2 rounded-xl shadow-xl text-xs font-semibold animate-in fade-in slide-in-from-top-2 flex items-center gap-2`}>
           <span>{game.toastMessage}</span>
         </div>
       )}

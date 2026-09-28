@@ -1,5 +1,12 @@
+import { GAME_CONFIG } from '@crossword/shared';
 import { Clock, HelpCircle, KeyRound, ShieldAlert, Sparkles, Trophy, X } from 'lucide-react';
 import React from 'react';
+
+const pad = (n: number) => String(n).padStart(2, '0');
+const RELEASE_TIME = `${pad(GAME_CONFIG.RELEASE_HOUR_UTC)}:${pad(GAME_CONFIG.RELEASE_MINUTE_UTC)} UTC`;
+const CHECK = GAME_CONFIG.CHECK_WORD_PENALTY_SECONDS;
+const REVEAL = GAME_CONFIG.REVEAL_LETTER_PENALTY_SECONDS;
+const SUBMIT = GAME_CONFIG.SUBMIT_INCORRECT_PENALTY_SECONDS;
 
 interface HowToPlayModalProps {
   isOpen: boolean;
@@ -36,7 +43,7 @@ export const HowToPlayModal: React.FC<HowToPlayModalProps> = ({ isOpen, onClose 
             <div>
               <h3 className="font-bold text-white">One Daily Puzzle (24h Window)</h3>
               <p className="text-xs text-[#949ba4] mt-0.5">
-                A new crossword drops daily at <strong>00:00 UTC</strong>. The puzzle is open for 24 hours of ranked play.
+                A new crossword drops daily at <strong>{RELEASE_TIME}</strong>. The puzzle is open for 24 hours of ranked play.
               </p>
             </div>
           </div>
@@ -60,9 +67,9 @@ export const HowToPlayModal: React.FC<HowToPlayModalProps> = ({ isOpen, onClose 
               <Sparkles className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="font-bold text-white">Check Word (+30s penalty)</h3>
+              <h3 className="font-bold text-white">Check Word (+{CHECK}s penalty)</h3>
               <p className="text-xs text-[#949ba4] mt-0.5">
-                When an active entry is full, click Check Word. If correct, its cells lock in place. If wrong, 30 seconds are added. Re-checking the <em>same</em> incorrect guess is free!
+                When an active entry is full, click Check Word. If correct, its cells lock in place. If wrong, {CHECK} seconds are added. Re-checking the <em>same</em> incorrect guess is free!
               </p>
             </div>
           </div>
@@ -73,9 +80,9 @@ export const HowToPlayModal: React.FC<HowToPlayModalProps> = ({ isOpen, onClose 
               <KeyRound className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="font-bold text-white">Reveal Letter (+60s penalty)</h3>
+              <h3 className="font-bold text-white">Reveal Letter (+{REVEAL}s penalty)</h3>
               <p className="text-xs text-[#949ba4] mt-0.5">
-                Stuck on a tricky crossing? Reveal the selected square for a 60-second penalty. The letter is permanently locked in.
+                Stuck on a tricky crossing? Reveal the selected square for a {REVEAL}-second penalty. The letter is permanently locked in.
               </p>
             </div>
           </div>
@@ -86,9 +93,9 @@ export const HowToPlayModal: React.FC<HowToPlayModalProps> = ({ isOpen, onClose 
               <ShieldAlert className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="font-bold text-white">Automatic Submission (+30s if wrong)</h3>
+              <h3 className="font-bold text-white">Submitting (+{SUBMIT}s if wrong)</h3>
               <p className="text-xs text-[#949ba4] mt-0.5">
-                As soon as every square is filled, your grid is verified automatically. If 100% correct, your attempt finishes! If any letters are incorrect, a 30-second penalty is added.
+                When you fill the last empty square, your grid is checked automatically. If it's 100% correct, your attempt finishes! If any letters are wrong, {SUBMIT} seconds are added. Fix the mistakes, then press <strong>Submit</strong> to check again (another {SUBMIT} seconds if it's still wrong).
               </p>
             </div>
           </div>

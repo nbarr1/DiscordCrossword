@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
+import { findArrowTarget } from '../packages/client/src/navigation.js';
 import { GridCellMeta } from '../packages/shared/src/index.js';
 
 describe('Crossword Grid Keyboard Navigation', () => {
@@ -6,141 +7,26 @@ describe('Crossword Grid Keyboard Navigation', () => {
   // [white, white, white]
   // [white, BLACK, white]
   // [white, white, white]
+  const w = (number: number): GridCellMeta => ({ isBlack: false, number });
   const mockGridMeta: GridCellMeta[][] = [
-    [
-      { isBlack: false, number: 1 },
-      { isBlack: false, number: 2 },
-      { isBlack: false, number: 3 },
-    ],
-    [
-      { isBlack: false, number: 4 },
-      { isBlack: true, number: null },
-      { isBlack: false, number: 5 },
-    ],
-    [
-      { isBlack: false, number: 6 },
-      { isBlack: false, number: 7 },
-      { isBlack: false, number: 8 },
-    ],
+    [w(1), w(2), w(3)],
+    [w(4), { isBlack: true, number: null }, w(5)],
+    [w(6), w(7), w(8)],
   ];
 
-  function simulateNavKey(
-    key: string,
-    shiftKey: boolean,
-    selectedCell: { row: number; col: number },
-    gridMeta: GridCellMeta[][],
-    callbacks: {
-      onSelectCell: (row: number, col: number) => void;
-      onNextClue: () => void;
-      onPrevClue: () => void;
-    }
-  ) {
-    if (key === 'Tab') {
-      if (shiftKey) {
-        callbacks.onPrevClue();
-      } else {
-        callbacks.onNextClue();
-      }
-      return;
-    }
-
-    if (key === 'ArrowUp') {
-      let nextR = selectedCell.row - 1;
-      while (nextR >= 0 && gridMeta[nextR]?.[selectedCell.col]?.isBlack) {
-        nextR--;
-      }
-      if (nextR >= 0 && !gridMeta[nextR]?.[selectedCell.col]?.isBlack) {
-        callbacks.onSelectCell(nextR, selectedCell.col);
-      }
-      return;
-    }
-
-    if (key === 'ArrowDown') {
-      let nextR = selectedCell.row + 1;
-      while (nextR < gridMeta.length && gridMeta[nextR]?.[selectedCell.col]?.isBlack) {
-        nextR++;
-      }
-      if (nextR < gridMeta.length && !gridMeta[nextR]?.[selectedCell.col]?.isBlack) {
-        callbacks.onSelectCell(nextR, selectedCell.col);
-      }
-      return;
-    }
-
-    if (key === 'ArrowLeft') {
-      let nextC = selectedCell.col - 1;
-      while (nextC >= 0 && gridMeta[selectedCell.row]?.[nextC]?.isBlack) {
-        nextC--;
-      }
-      if (nextC >= 0 && !gridMeta[selectedCell.row]?.[nextC]?.isBlack) {
-        callbacks.onSelectCell(selectedCell.row, nextC);
-      }
-      return;
-    }
-
-    if (key === 'ArrowRight') {
-      let nextC = selectedCell.col + 1;
-      while (nextC < (gridMeta[0]?.length || 3) && gridMeta[selectedCell.row]?.[nextC]?.isBlack) {
-        nextC++;
-      }
-      if (nextC < (gridMeta[0]?.length || 3) && !gridMeta[selectedCell.row]?.[nextC]?.isBlack) {
-        callbacks.onSelectCell(selectedCell.row, nextC);
-      }
-      return;
-    }
-  }
-
-  it('navigates between cells using arrow keys', () => {
-    const onSelectCell = vi.fn();
-    const onNextClue = vi.fn();
-    const onPrevClue = vi.fn();
-
-    // From (0, 0), ArrowRight should go to (0, 1)
-    simulateNavKey('ArrowRight', false, { row: 0, col: 0 }, mockGridMeta, {
-      onSelectCell,
-      onNextClue,
-      onPrevClue,
-    });
-    expect(onSelectCell).toHaveBeenCalledWith(0, 1);
-
-    // From (0, 1), ArrowDown over black square at (1, 1) should step to (2, 1)
-    onSelectCell.mockClear();
-    simulateNavKey('ArrowDown', false, { row: 0, col: 1 }, mockGridMeta, {
-      onSelectCell,
-      onNextClue,
-      onPrevClue,
-    });
-    expect(onSelectCell).toHaveBeenCalledWith(2, 1);
-
-    // From (2, 1), ArrowUp over black square at (1, 1) should step back to (0, 1)
-    onSelectCell.mockClear();
-    simulateNavKey('ArrowUp', false, { row: 2, col: 1 }, mockGridMeta, {
-      onSelectCell,
-      onNextClue,
-      onPrevClue,
-    });
-    expect(onSelectCell).toHaveBeenCalledWith(0, 1);
+  it('moves one cell with the arrow keys', () => {
+    expect(findArrowTarget(mockGridMeta, { row: 0, col: 0 }, 'ArrowRight')).toEqual({ row: 0, col: 1 });
+    expect(findArrowTarget(mockGridMeta, { row: 0, col: 1 }, 'ArrowLeft')).toEqual({ row: 0, col: 0 });
   });
 
-  it('switches clues with Tab and Shift+Tab', () => {
-    const onSelectCell = vi.fn();
-    const onNextClue = vi.fn();
-    const onPrevClue = vi.fn();
+  it('skips over black squares', () => {
+    expect(findArrowTarget(mockGridMeta, { row: 0, col: 1 }, 'ArrowDown')).toEqual({ row: 2, col: 1 });
+    expect(findArrowTarget(mockGridMeta, { row: 2, col: 1 }, 'ArrowUp')).toEqual({ row: 0, col: 1 });
+    expect(findArrowTarget(mockGridMeta, { row: 1, col: 0 }, 'ArrowRight')).toEqual({ row: 1, col: 2 });
+  });
 
-    // Tab -> next clue
-    simulateNavKey('Tab', false, { row: 0, col: 0 }, mockGridMeta, {
-      onSelectCell,
-      onNextClue,
-      onPrevClue,
-    });
-    expect(onNextClue).toHaveBeenCalledTimes(1);
-    expect(onPrevClue).not.toHaveBeenCalled();
-
-    // Shift+Tab -> prev clue
-    simulateNavKey('Tab', true, { row: 0, col: 0 }, mockGridMeta, {
-      onSelectCell,
-      onNextClue,
-      onPrevClue,
-    });
-    expect(onPrevClue).toHaveBeenCalledTimes(1);
+  it('stays put at the edge of the grid', () => {
+    expect(findArrowTarget(mockGridMeta, { row: 0, col: 2 }, 'ArrowRight')).toBeNull();
+    expect(findArrowTarget(mockGridMeta, { row: 0, col: 0 }, 'ArrowUp')).toBeNull();
   });
 });

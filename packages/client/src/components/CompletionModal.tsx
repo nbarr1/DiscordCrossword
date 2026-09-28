@@ -2,6 +2,29 @@ import { formatTime } from '@crossword/shared';
 import { Award, CheckCircle2, Copy, Trophy, X } from 'lucide-react';
 import React, { useState } from 'react';
 
+/** Copies text, falling back to a hidden text area where the Clipboard API is unavailable. */
+async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    const area = document.createElement('textarea');
+    area.value = text;
+    area.setAttribute('readonly', '');
+    area.style.position = 'fixed';
+    area.style.opacity = '0';
+    document.body.appendChild(area);
+    area.select();
+    try {
+      return document.execCommand('copy');
+    } catch {
+      return false;
+    } finally {
+      area.remove();
+    }
+  }
+}
+
 interface CompletionModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -21,18 +44,18 @@ export const CompletionModal: React.FC<CompletionModalProps> = ({
   penaltySeconds,
   totalScoreSeconds,
 }) => {
-  const [copied, setCopied] = useState(false);
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
 
   if (!isOpen) return null;
 
-  const handleShare = () => {
+  const handleShare = async () => {
     const text = `📰 Discord Daily Crossword (${puzzleDate})\n⏱️ Final Score: ${formatTime(totalScoreSeconds)}${
       penaltySeconds > 0 ? ` (+${penaltySeconds}s penalties)` : ' (Flawless Solve!)'
     }\nPlay today's puzzle in Discord!`;
 
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 3000);
+    // Clipboard access can be blocked inside Discord's iframe, so report what actually happened.
+    setCopyState((await copyText(text)) ? 'copied' : 'failed');
+    setTimeout(() => setCopyState('idle'), 3000);
   };
 
   return (
@@ -81,8 +104,14 @@ export const CompletionModal: React.FC<CompletionModalProps> = ({
               onClick={handleShare}
               className="w-full py-2.5 px-4 rounded-xl bg-[#23a55a] hover:bg-[#1f9250] text-white font-bold text-sm flex items-center justify-center gap-2 transition-all shadow active:scale-98"
             >
-              {copied ? <CheckCircle2 className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-              <span>{copied ? 'Score Copied to Clipboard!' : 'Share Spoiler-Free Score'}</span>
+              {copyState === 'copied' ? <CheckCircle2 className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+              <span>
+                {copyState === 'copied'
+                  ? 'Score Copied to Clipboard!'
+                  : copyState === 'failed'
+                    ? "Couldn't Copy the Score"
+                    : 'Share Spoiler-Free Score'}
+              </span>
             </button>
 
             <button

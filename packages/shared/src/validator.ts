@@ -19,7 +19,7 @@ export interface ValidationResult {
 }
 
 /**
- * Validates a 15x15 black square template against all strict crossword rules.
+ * Validates a black square template (GRID_WIDTH x GRID_HEIGHT by default) against all strict crossword rules.
  * grid[r][c] === true for black cells, false for white cells.
  */
 export function validateGridTemplate(
@@ -110,7 +110,7 @@ export function validateGridTemplate(
 }
 
 /**
- * Parses a string template representation (e.g. 15 strings of length 15 with '.' for white and '#' for black)
+ * Parses a string template representation (one string per row, with '.' for white and '#' for black)
  */
 export function parseGridStringTemplate(rows: string[]): boolean[][] {
   return rows.map((row) =>
@@ -122,7 +122,7 @@ export function parseGridStringTemplate(rows: string[]): boolean[][] {
 }
 
 /**
- * Serializes a boolean grid to an array of 15 strings.
+ * Serializes a boolean grid to one string per row.
  */
 export function serializeGridToString(grid: boolean[][]): string[] {
   return grid.map((row) => row.map((b) => (b ? '#' : '.')).join(''));

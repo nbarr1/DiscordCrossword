@@ -43,6 +43,7 @@ async function main() {
         console.log(`✅ Successfully generated & buffered puzzle: ${puzzle.id} (${puzzle.title})`);
       } else {
         console.error('❌ Failed to generate puzzle.');
+        process.exitCode = 1;
       }
       break;
     }

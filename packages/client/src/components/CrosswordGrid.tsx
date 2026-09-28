@@ -1,6 +1,7 @@
 import { GridCellMeta } from '@crossword/shared';
 import { Delete, Keyboard as KeyboardIcon, Lock } from 'lucide-react';
-import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import React, { forwardRef, useCallback, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import { findArrowTarget, isArrowKey } from '../navigation.js';
 
 export interface CrosswordGridHandle {
   handleKeyDown: (e: KeyboardEvent | React.KeyboardEvent) => void;
@@ -19,7 +20,6 @@ export interface CrosswordGridProps {
   onBackspace: () => void;
   onNextClue?: () => void;
   onPrevClue?: () => void;
-  onKeyDown?: (e: KeyboardEvent | React.KeyboardEvent) => void;
 }
 
 const KEYBOARD_ROWS = [
@@ -43,7 +43,6 @@ export const CrosswordGrid = forwardRef<CrosswordGridHandle, CrosswordGridProps>
       onBackspace,
       onNextClue,
       onPrevClue,
-      onKeyDown,
     },
     ref
   ) => {
@@ -58,33 +57,15 @@ export const CrosswordGrid = forwardRef<CrosswordGridHandle, CrosswordGridProps>
     }, [activeEntryCells]);
 
     // Keep freshest state & callbacks in ref to keep handleKeyDown stable
-    const stateRef = useRef({
-      selectedCell,
-      gridMeta,
-      onSelectCell,
-      onNextClue,
-      onPrevClue,
-      onKeyDown,
-    });
-    stateRef.current = {
-      selectedCell,
-      gridMeta,
-      onSelectCell,
-      onNextClue,
-      onPrevClue,
-      onKeyDown,
-    };
+    const stateRef = useRef({ selectedCell, gridMeta, onSelectCell, onNextClue, onPrevClue });
+    stateRef.current = { selectedCell, gridMeta, onSelectCell, onNextClue, onPrevClue };
 
-    // Handle arrow keys navigation and Tab / Shift+Tab clue switching
+    // Arrow keys move between white squares; Tab / Shift+Tab switch clues. The app's single
+    // window key listener calls this, so the grid itself doesn't listen for keys (a second
+    // listener would move the selection twice).
     const handleKeyDown = useCallback((e: KeyboardEvent | React.KeyboardEvent) => {
-      const {
-        selectedCell: curCell,
-        gridMeta: curMeta,
-        onSelectCell: curSelect,
-        onNextClue: curNext,
-        onPrevClue: curPrev,
-        onKeyDown: curKeyDown,
-      } = stateRef.current;
+      const { selectedCell: curCell, gridMeta: curMeta, onSelectCell: curSelect, onNextClue: curNext, onPrevClue: curPrev } =
+        stateRef.current;
 
       if (e.key === 'Tab') {
         e.preventDefault();
@@ -93,63 +74,16 @@ export const CrosswordGrid = forwardRef<CrosswordGridHandle, CrosswordGridProps>
         } else {
           curNext?.();
         }
-        curKeyDown?.(e);
         return;
       }
 
-      if (e.key === 'ArrowUp') {
+      if (isArrowKey(e.key)) {
         e.preventDefault();
-        let nextR = curCell.row - 1;
-        while (nextR >= 0 && curMeta[nextR]?.[curCell.col]?.isBlack) {
-          nextR--;
+        const target = findArrowTarget(curMeta, curCell, e.key);
+        if (target) {
+          curSelect(target.row, target.col);
         }
-        if (nextR >= 0 && !curMeta[nextR]?.[curCell.col]?.isBlack) {
-          curSelect(nextR, curCell.col);
-        }
-        curKeyDown?.(e);
-        return;
       }
-
-      if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        let nextR = curCell.row + 1;
-        while (nextR < curMeta.length && curMeta[nextR]?.[curCell.col]?.isBlack) {
-          nextR++;
-        }
-        if (nextR < curMeta.length && !curMeta[nextR]?.[curCell.col]?.isBlack) {
-          curSelect(nextR, curCell.col);
-        }
-        curKeyDown?.(e);
-        return;
-      }
-
-      if (e.key === 'ArrowLeft') {
-        e.preventDefault();
-        let nextC = curCell.col - 1;
-        while (nextC >= 0 && curMeta[curCell.row]?.[nextC]?.isBlack) {
-          nextC--;
-        }
-        if (nextC >= 0 && !curMeta[curCell.row]?.[nextC]?.isBlack) {
-          curSelect(curCell.row, nextC);
-        }
-        curKeyDown?.(e);
-        return;
-      }
-
-      if (e.key === 'ArrowRight') {
-        e.preventDefault();
-        let nextC = curCell.col + 1;
-        while (nextC < (curMeta[0]?.length || 0) && curMeta[curCell.row]?.[nextC]?.isBlack) {
-          nextC++;
-        }
-        if (nextC < (curMeta[0]?.length || 0) && !curMeta[curCell.row]?.[nextC]?.isBlack) {
-          curSelect(curCell.row, nextC);
-        }
-        curKeyDown?.(e);
-        return;
-      }
-
-      curKeyDown?.(e);
     }, []);
 
     useImperativeHandle(
@@ -162,11 +96,9 @@ export const CrosswordGrid = forwardRef<CrosswordGridHandle, CrosswordGridProps>
 
     return (
       <div
-        tabIndex={0}
-        onKeyDown={(e) => handleKeyDown(e)}
         className="flex flex-col items-center select-none w-full max-w-[540px] focus:outline-none"
       >
-        {/* Crossword Table (sized from the puzzle, which may not be 15x15) */}
+        {/* Crossword Table (rows and columns sized from the puzzle) */}
         <div className="w-full aspect-square bg-[#111214] p-1 sm:p-2 rounded-xl shadow-2xl border border-[#2b2d31]">
           <div
             className="grid w-full h-full gap-[1px] sm:gap-[1.5px] bg-[#232428] rounded-lg overflow-hidden border border-[#1f2023]"

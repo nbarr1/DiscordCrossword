@@ -1,5 +1,5 @@
-import { formatTime } from '@crossword/shared';
-import { Award, Clock, HelpCircle, KeyRound, ShieldAlert, Sparkles } from 'lucide-react';
+import { formatTime, GAME_CONFIG } from '@crossword/shared';
+import { Award, Clock, HelpCircle, KeyRound, Send, Sparkles } from 'lucide-react';
 import React from 'react';
 import { ClientSession } from '../discord.js';
 
@@ -11,9 +11,12 @@ interface HeaderBarProps {
   penaltySeconds: number;
   totalScoreSeconds: number;
   isCompleted: boolean;
+  isClosed: boolean;
   isActiveEntryFull: boolean;
+  isGridFull: boolean;
   onCheckWord: () => void;
   onRevealLetter: () => void;
+  onSubmit: () => void;
   onOpenLeaderboard: () => void;
   onOpenHelp: () => void;
 }
@@ -26,12 +29,19 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
   penaltySeconds,
   totalScoreSeconds,
   isCompleted,
+  isClosed,
   isActiveEntryFull,
+  isGridFull,
   onCheckWord,
   onRevealLetter,
+  onSubmit,
   onOpenLeaderboard,
   onOpenHelp,
 }) => {
+  const canPlay = !isCompleted && !isClosed;
+  const canCheck = canPlay && isActiveEntryFull;
+  const canSubmit = canPlay && isGridFull;
+
   return (
     <header className="bg-[#2b2d31] border-b border-[#1f2023] px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 shadow-md select-none">
       {/* Left: Brand & Puzzle info */}
@@ -77,7 +87,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
             )}
           </div>
           <span className="text-[10px] text-[#949ba4] uppercase tracking-wider font-semibold">
-            {isCompleted ? 'Final Time' : 'Wall Clock'}
+            {isCompleted ? 'Final Time' : isClosed ? 'Closed' : 'Wall Clock'}
           </span>
         </div>
       </div>
@@ -86,10 +96,14 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
       <div className="flex items-center gap-2">
         <button
           onClick={onCheckWord}
-          disabled={!isActiveEntryFull || isCompleted}
-          title={isActiveEntryFull ? 'Check active word (+30s penalty if incorrect)' : 'Fill the active word to check'}
+          disabled={!canCheck}
+          title={
+            isActiveEntryFull
+              ? `Check active word (+${GAME_CONFIG.CHECK_WORD_PENALTY_SECONDS}s penalty if incorrect)`
+              : 'Fill the active word to check'
+          }
           className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md transition-all shadow-sm ${
-            isActiveEntryFull && !isCompleted
+            canCheck
               ? 'bg-[#5865f2] hover:bg-[#4752c4] text-white active:scale-95'
               : 'bg-[#313338] text-[#80848e] cursor-not-allowed opacity-60'
           }`}
@@ -100,16 +114,34 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
 
         <button
           onClick={onRevealLetter}
-          disabled={isCompleted}
-          title="Reveal selected letter (+60s penalty)"
+          disabled={!canPlay}
+          title={`Reveal selected letter (+${GAME_CONFIG.REVEAL_LETTER_PENALTY_SECONDS}s penalty)`}
           className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${
-            !isCompleted
+            canPlay
               ? 'bg-[#e0a82e] hover:bg-[#c99525] text-black active:scale-95'
               : 'bg-[#313338] text-[#80848e] cursor-not-allowed opacity-60'
           }`}
         >
           <KeyRound className="w-3.5 h-3.5" />
-          <span className="hidden sm:inline">Reveal</span> (+60s)
+          <span className="hidden sm:inline">Reveal</span> (+{GAME_CONFIG.REVEAL_LETTER_PENALTY_SECONDS}s)
+        </button>
+
+        <button
+          onClick={onSubmit}
+          disabled={!canSubmit}
+          title={
+            isGridFull
+              ? `Submit your grid (+${GAME_CONFIG.SUBMIT_INCORRECT_PENALTY_SECONDS}s penalty if anything is wrong)`
+              : 'Fill every square to submit'
+          }
+          className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md transition-all shadow-sm ${
+            canSubmit
+              ? 'bg-[#23a55a] hover:bg-[#1f9250] text-white active:scale-95'
+              : 'bg-[#313338] text-[#80848e] cursor-not-allowed opacity-60'
+          }`}
+        >
+          <Send className="w-3.5 h-3.5" />
+          Submit
         </button>
 
         <button

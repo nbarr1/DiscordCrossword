@@ -132,4 +132,16 @@ describe('Discord Bot & Interactions', () => {
     );
     expect(res.body).toEqual({ type: 12 });
   });
+
+  it('rejects interaction types it does not handle instead of answering PONG', async () => {
+    const res = mockResponse();
+    await handleDiscordInteractions(signedRequest({ type: 3, data: { custom_id: 'x' } }), res);
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('answers unknown commands with an ephemeral message', async () => {
+    const res = mockResponse();
+    await handleDiscordInteractions(signedRequest({ type: 2, data: { name: 'not-a-command' } }), res);
+    expect(res.body).toEqual({ type: 4, data: { content: 'Unknown command: /not-a-command', flags: 64 } });
+  });
 });

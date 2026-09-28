@@ -1,29 +1,30 @@
-import { queryAll, queryOne, runQuery } from '../db/database.js';
+import { getPuzzleDate } from '@crossword/shared';
+import { queryAll, runQuery } from '../db/database.js';
 import { defaultBotClient } from '../discord/bot.js';
-import { createFallbackPuzzle } from '../engine/fallbackPuzzles.js';
 import { PuzzlePipeline } from '../engine/pipeline.js';
+import { publishPuzzleForDate } from '../engine/puzzleStore.js';
 
 export class DailyScheduler {
   private timer: NodeJS.Timeout | null = null;
   private pipeline: PuzzlePipeline;
-  private lastCheckedDate: string = '';
-  // Generation can outlast the 60s interval; overlapping ticks would generate the same dates twice.
-  private running = false;
+  private lastReleasedDate = '';
+  // Release and buffer maintenance are guarded separately: generation can take minutes (or hang on
+  // a slow LLM call), and it must never hold up the daily release or the leaderboard posts.
+  private releasing = false;
+  private maintaining = false;
 
-  constructor() {
-    this.pipeline = new PuzzlePipeline();
+  constructor(pipeline: PuzzlePipeline = new PuzzlePipeline()) {
+    this.pipeline = pipeline;
   }
 
   public start(): void {
     console.log('[Scheduler] Daily crossword scheduler started.');
 
     // Run immediate startup check
-    this.tick().catch(console.error);
+    this.tick();
 
-    // Poll every 60 seconds to detect 00:00 UTC boundary
-    this.timer = setInterval(() => {
-      this.tick().catch(console.error);
-    }, 60 * 1000);
+    // Poll every 60 seconds to detect the daily release boundary
+    this.timer = setInterval(() => this.tick(), 60 * 1000);
   }
 
   public stop(): void {
@@ -33,71 +34,58 @@ export class DailyScheduler {
     }
   }
 
-  private async tick(): Promise<void> {
-    if (this.running) return;
-    this.running = true;
-    try {
-      // Release first so the daily rollover isn't delayed by (slow) puzzle generation.
-      await this.releaseDailyPuzzle();
+  private tick(): void {
+    this.runRelease().catch((err) => console.error('[Scheduler] Release failed:', err));
+    this.runMaintenance().catch((err) => console.warn('[Scheduler] Buffer maintenance warning:', err));
+  }
 
-      try {
-        await this.pipeline.maintainBuffer();
-      } catch (err) {
-        console.warn('[Scheduler] Buffer maintenance warning:', err);
-      }
+  public async runRelease(now: Date = new Date()): Promise<void> {
+    if (this.releasing) return;
+    this.releasing = true;
+    try {
+      await this.releaseDailyPuzzle(now);
     } finally {
-      this.running = false;
+      this.releasing = false;
     }
   }
 
-  private async releaseDailyPuzzle(): Promise<void> {
-    const todayStr = new Date().toISOString().split('T')[0];
+  public async runMaintenance(now: Date = new Date()): Promise<void> {
+    if (this.maintaining) return;
+    this.maintaining = true;
+    try {
+      await this.pipeline.maintainBuffer(now);
+    } finally {
+      this.maintaining = false;
+    }
+  }
 
-    if (this.lastCheckedDate === todayStr) {
+  private async releaseDailyPuzzle(now: Date): Promise<void> {
+    const todayStr = getPuzzleDate(now);
+
+    if (this.lastReleasedDate === todayStr) {
       return;
     }
 
-    // New UTC day detected!
     console.log(`[Scheduler] Checking daily release for ${todayStr}...`);
-    this.lastCheckedDate = todayStr;
 
-    // 1. Close yesterday's puzzle and post final server leaderboards
-    const yesterday = new Date();
-    yesterday.setUTCDate(yesterday.getUTCDate() - 1);
-    const yesterdayStr = yesterday.toISOString().split('T')[0];
+    // 1. Publish today's puzzle from the buffer, or a fallback
+    publishPuzzleForDate(todayStr, now);
 
-    const prevPuzzle = await queryOne<{ id: string; date: string }>(
-      `SELECT id, date FROM puzzles WHERE date = ? AND status = 'published';`,
-      [yesterdayStr]
-    );
-
-    if (prevPuzzle) {
-      console.log(`[Scheduler] Closing yesterday's puzzle (${yesterdayStr}) and posting leaderboards...`);
-      await runQuery(`UPDATE puzzles SET status = 'archived' WHERE id = ?;`, [prevPuzzle.id]);
-      await defaultBotClient.postDailyLeaderboards(prevPuzzle.id, prevPuzzle.date);
-    }
-
-    // 2. Publish today's puzzle from buffer or fallback
-    let todayPuzzle = await queryOne<{ id: string }>(
-      `SELECT id FROM puzzles WHERE date = ? AND status = 'published';`,
+    // 2. Close earlier puzzles (normally just yesterday's, more if the server was down across a
+    // release) and post their final server leaderboards
+    const closed = queryAll<{ id: string; date: string }>(
+      `SELECT id, date FROM puzzles WHERE date < ? AND status = 'published' ORDER BY date;`,
       [todayStr]
     );
 
-    if (!todayPuzzle) {
-      const buffered = await queryOne<{ id: string }>(
-        `SELECT id FROM puzzles WHERE date = ? AND status = 'buffered';`,
-        [todayStr]
-      );
-
-      if (buffered) {
-        await runQuery(`UPDATE puzzles SET status = 'published' WHERE id = ?;`, [buffered.id]);
-        console.log(`[Scheduler] Published buffered puzzle for ${todayStr}.`);
-      } else {
-        console.warn(`[Scheduler] No buffered puzzle for ${todayStr}. Publishing fallback puzzle.`);
-        const fallback = createFallbackPuzzle(todayStr, 0);
-        await this.pipeline.savePuzzleToDatabase(fallback, 'published');
-      }
+    for (const prevPuzzle of closed) {
+      console.log(`[Scheduler] Closing the ${prevPuzzle.date} puzzle and posting leaderboards...`);
+      runQuery(`UPDATE puzzles SET status = 'archived' WHERE id = ?;`, [prevPuzzle.id]);
+      await defaultBotClient.postDailyLeaderboards(prevPuzzle.id, prevPuzzle.date);
     }
+
+    // Only marked done once both steps succeeded, so a failure is retried on the next tick.
+    this.lastReleasedDate = todayStr;
   }
 }
 

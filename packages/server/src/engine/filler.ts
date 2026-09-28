@@ -19,6 +19,14 @@ export interface FillResult {
   };
 }
 
+// The search runs on the web server's thread, so it hands control back to the event loop this
+// often; API requests wait at most about this long while a puzzle is being generated.
+const YIELD_INTERVAL_MS = 15;
+
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
 /**
  * Simple pseudo-random number generator (Mulberry32) for deterministic tests.
  */
@@ -39,8 +47,9 @@ export class CrosswordFiller {
     this.dictionary = dict;
   }
 
-  public fill(grid: boolean[][], options: FillOptions = {}): FillResult {
+  public async fill(grid: boolean[][], options: FillOptions = {}): Promise<FillResult> {
     const startTime = Date.now();
+    let lastYield = startTime;
     const timeBudgetMs = options.timeBudgetMs ?? GAME_CONFIG.SOLVER_TIME_BUDGET_MS;
     const random = options.seed !== undefined ? createPrng(options.seed) : Math.random;
 
@@ -59,22 +68,26 @@ export class CrosswordFiller {
     let nodesExplored = 0;
     let timedOut = false;
 
-    // Apply any initial seed entries if provided
+    // Pre-place seed (theme) entries. Their slots are marked filled, so the search never checks them
+    // against the dictionary; a seed whose letters clash with an earlier seed is skipped.
     if (options.seedEntries) {
       for (const seed of options.seedEntries) {
         const slot = allSlots.find(
           (s) => s.number === seed.number && s.direction === seed.direction
         );
-        if (slot && slot.length === seed.word.length) {
-          const upper = seed.word.toUpperCase();
-          this.dictionary.addCustomWord(upper, 99);
-          usedWords.add(upper);
-          slotWords[`${slot.number}-${slot.direction}`] = upper;
-          for (let i = 0; i < slot.length; i++) {
-            const { row, col } = slot.cells[i];
-            letters[row][col] = upper[i];
-          }
+        const upper = seed.word.toUpperCase();
+        if (!slot || slot.length !== upper.length || !/^[A-Z]+$/.test(upper) || usedWords.has(upper)) {
+          continue;
         }
+        const clashes = slot.cells.some(({ row, col }, i) => letters[row][col] !== '.' && letters[row][col] !== upper[i]);
+        if (clashes) {
+          continue;
+        }
+        usedWords.add(upper);
+        slotWords[`${slot.number}-${slot.direction}`] = upper;
+        slot.cells.forEach(({ row, col }, i) => {
+          letters[row][col] = upper[i];
+        });
       }
     }
 
@@ -107,12 +120,17 @@ export class CrosswordFiller {
       crossingSlots.set(slotKey(slot), [...crossing]);
     }
 
-    const search = (implicit: string[]): boolean => {
+    const search = async (implicit: string[]): Promise<boolean> => {
       nodesExplored++;
       if (nodesExplored % 20 === 0) {
-        if (Date.now() - startTime > timeBudgetMs) {
+        const now = Date.now();
+        if (now - startTime > timeBudgetMs) {
           timedOut = true;
           return false;
+        }
+        if (now - lastYield >= YIELD_INTERVAL_MS) {
+          await yieldToEventLoop();
+          lastYield = Date.now();
         }
       }
 
@@ -197,7 +215,7 @@ export class CrosswordFiller {
         }
 
         if (forwardCheckOk) {
-          if (solve()) {
+          if (await solve()) {
             return true;
           }
         }
@@ -217,9 +235,9 @@ export class CrosswordFiller {
 
     // Words completed by crossing letters are recorded as a side effect of search();
     // undo them when this branch fails, or backtracking leaves stale (possibly invalid) entries.
-    const solve = (): boolean => {
+    const solve = async (): Promise<boolean> => {
       const implicit: string[] = [];
-      if (search(implicit)) return true;
+      if (await search(implicit)) return true;
       for (const key of implicit) {
         usedWords.delete(slotWords[key]);
         delete slotWords[key];
@@ -227,7 +245,7 @@ export class CrosswordFiller {
       return false;
     };
 
-    const success = solve();
+    const success = await solve();
     const durationMs = Date.now() - startTime;
 
     return {

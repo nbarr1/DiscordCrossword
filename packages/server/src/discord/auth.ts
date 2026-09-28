@@ -96,21 +96,21 @@ export async function exchangeDiscordCode(
   const userJson = await userRes.json();
   let verifiedGuildId: string | null = null;
 
-  // Verify guild membership if user claims a guild
-  if (claimedGuildId) {
+  // Verify guild membership if the user claims a guild. This asks about that one guild (scope
+  // guilds.members.read) rather than scanning /users/@me/guilds, which returns at most 200 guilds.
+  if (claimedGuildId && /^\d+$/.test(claimedGuildId)) {
     try {
-      const guildsRes = await fetch('https://discord.com/api/v10/users/@me/guilds', {
+      const memberRes = await fetch(`https://discord.com/api/v10/users/@me/guilds/${claimedGuildId}/member`, {
         headers: {
           Authorization: `Bearer ${accessToken}`,
         },
       });
-      if (guildsRes.ok) {
-        const guilds: { id: string }[] = await guildsRes.json();
-        if (guilds.some((g) => g.id === claimedGuildId)) {
-          verifiedGuildId = claimedGuildId;
-        } else {
-          console.warn(`[Auth] User ${userJson.id} does not belong to claimed guild ${claimedGuildId}`);
-        }
+      if (memberRes.ok) {
+        verifiedGuildId = claimedGuildId;
+      } else {
+        console.warn(
+          `[Auth] Could not confirm user ${userJson.id} is in guild ${claimedGuildId} (HTTP ${memberRes.status}); playing unranked.`
+        );
       }
     } catch (err) {
       console.warn('[Auth] Guild verification error:', err);

@@ -1,5 +1,5 @@
 import { DiscordSDK } from '@discord/embedded-app-sdk';
-import { AuthSessionResponse } from '@crossword/shared';
+import { ApiErrorCode, ApiErrorResponse, AuthSessionResponse } from '@crossword/shared';
 
 const CLIENT_ID =
   (typeof import.meta !== 'undefined' && import.meta.env?.VITE_DISCORD_CLIENT_ID) ||
@@ -83,7 +83,8 @@ export function initializeDiscordAuth(): Promise<ClientSession> {
           response_type: 'code',
           state: '',
           prompt: 'none',
-          scope: ['identify', 'guilds'],
+          // guilds.members.read lets the server confirm the player belongs to this server.
+          scope: ['identify', 'guilds.members.read'],
         });
 
         // Exchange code through our server proxy
@@ -187,14 +188,36 @@ export async function apiFetch<T = any>(
 
   if (!response.ok) {
     let errorMsg = `Request failed: ${response.status}`;
+    let code: ApiErrorCode | undefined;
     try {
-      const errJson = await response.json();
+      const errJson: Partial<ApiErrorResponse> = await response.json();
       if (errJson.error) errorMsg = errJson.error;
+      code = errJson.code;
     } catch {
       // ignore
     }
-    throw new Error(errorMsg);
+    throw new ApiError(errorMsg, response.status, code);
   }
 
   return response.json();
+}
+
+/**
+ * A failed API request, with the HTTP status and the server's error code (such as
+ * PUZZLE_CLOSED) so callers can react to specific failures.
+ */
+export class ApiError extends Error {
+  readonly status: number;
+  readonly code?: ApiErrorCode;
+
+  constructor(message: string, status: number, code?: ApiErrorCode) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.code = code;
+  }
+}
+
+export function isPuzzleClosedError(err: unknown): boolean {
+  return err instanceof ApiError && err.code === 'PUZZLE_CLOSED';
 }

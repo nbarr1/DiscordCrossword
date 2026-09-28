@@ -5,7 +5,7 @@ import { getValidatedTemplates } from '../packages/server/src/engine/templates.j
 import { CrosswordDictionary, defaultDictionary } from '../packages/server/src/engine/wordlist.js';
 
 describe('Crossword Backtracking Filler', () => {
-  it('fills a grid reproducibly using a fixed random seed', () => {
+  it('fills a grid reproducibly using a fixed random seed', async () => {
     // 5x5 connected mini-crossword template
     // C A T S #
     // A R E A #
@@ -30,15 +30,15 @@ describe('Crossword Backtracking Filler', () => {
 
     const filler = new CrosswordFiller(dict);
 
-    const result1 = filler.fill(grid, { seed: 12345, timeBudgetMs: 5000 });
-    const result2 = filler.fill(grid, { seed: 12345, timeBudgetMs: 5000 });
+    const result1 = await filler.fill(grid, { seed: 12345, timeBudgetMs: 5000 });
+    const result2 = await filler.fill(grid, { seed: 12345, timeBudgetMs: 5000 });
 
     expect(result1.success).toBe(true);
     expect(result2.success).toBe(true);
     expect(result1.solution).toEqual(result2.solution);
   });
 
-  it('prevents duplicate word placements across slots', () => {
+  it('prevents duplicate word placements across slots', async () => {
     // 2 across slots of length 4, no intersections
     const lines = [
       '....#',
@@ -54,7 +54,7 @@ describe('Crossword Backtracking Filler', () => {
     dict.addCustomWord('TEST', 85);
 
     const filler = new CrosswordFiller(dict);
-    const result = filler.fill(grid, { seed: 42, timeBudgetMs: 5000 });
+    const result = await filler.fill(grid, { seed: 42, timeBudgetMs: 5000 });
 
     expect(result.success).toBe(true);
     const words = Object.values(result.slotWords);
@@ -63,10 +63,36 @@ describe('Crossword Backtracking Filler', () => {
     expect(words[0]).not.toBe(words[1]);
   });
 
-  it('fills a shipped template with unique dictionary words', () => {
+  it('places seed entries without adding them to the shared dictionary', async () => {
+    const grid = parseGridStringTemplate(['.....', '#####', '.....', '#####', '#####']);
+    const dict = new CrosswordDictionary([['HELLO', 90], ['WORLD', 90]]);
+    const result = await new CrosswordFiller(dict).fill(grid, {
+      seed: 1,
+      seedEntries: [{ number: 1, direction: 'across', word: 'ZZZZZ' }],
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.solution![0].join('')).toBe('ZZZZZ');
+    expect(dict.hasWord('ZZZZZ')).toBe(false);
+  });
+
+  it('lets other work run while it searches', async () => {
+    let timerRuns = 0;
+    const timer = setInterval(() => timerRuns++, 1);
+    try {
+      // A grid with no possible fill keeps the search busy for the whole budget.
+      const grid = parseGridStringTemplate(Array(12).fill('............'));
+      await new CrosswordFiller(defaultDictionary).fill(grid, { seed: 3, timeBudgetMs: 300 });
+    } finally {
+      clearInterval(timer);
+    }
+    expect(timerRuns).toBeGreaterThan(5);
+  });
+
+  it('fills a shipped template with unique dictionary words', async () => {
     const filler = new CrosswordFiller(defaultDictionary);
     for (const grid of [getValidatedTemplates()[0], getValidatedTemplates()[2]]) {
-      const result = filler.fill(grid, { seed: 2, timeBudgetMs: 10000 });
+      const result = await filler.fill(grid, { seed: 2, timeBudgetMs: 10000 });
       expect(result.success).toBe(true);
 
       // Check every slot from the final letters, including words formed only by crossings.

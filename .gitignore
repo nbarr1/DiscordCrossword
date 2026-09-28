@@ -9,3 +9,9 @@ coverage/
 
 # Runtime SQLite database (created by the server)
 *.db
+*.db-wal
+*.db-shm
+*.db-journal
+
+# CLI preview output (contains answers)
+preview.html

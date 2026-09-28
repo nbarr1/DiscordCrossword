@@ -1,8 +1,10 @@
+import { getPuzzleDate } from '@crossword/shared';
 import fs from 'fs';
 import path from 'path';
 import { queryAll, queryOne, runQuery } from '../db/database.js';
 import { runMigrations } from '../db/migrations.js';
 import { PuzzlePipeline } from '../engine/pipeline.js';
+import { getPuzzleRowById, isApprovalRequired } from '../engine/puzzleStore.js';
 
 async function main() {
   await runMigrations();
@@ -12,7 +14,7 @@ async function main() {
 
   switch (command) {
     case 'generate': {
-      let dateStr = new Date().toISOString().split('T')[0];
+      let dateStr = getPuzzleDate();
       let themePrompt: string | undefined;
 
       for (let i = 1; i < args.length; i++) {
@@ -25,13 +27,10 @@ async function main() {
         }
       }
 
-      // Saving replaces any row for the same date, which would orphan players' attempts on a live puzzle.
-      const live = await queryOne<{ id: string; status: string }>(
-        `SELECT id, status FROM puzzles WHERE date = ? AND status IN ('published', 'archived');`,
-        [dateStr]
-      );
+      // Saving replaces any other puzzle for the same date; a published one may already be in play.
+      const live = queryOne<{ id: string }>(`SELECT id FROM puzzles WHERE date = ? AND status = 'published';`, [dateStr]);
       if (live) {
-        console.error(`❌ Puzzle ${live.id} for ${dateStr} is already ${live.status}; refusing to replace it.`);
+        console.error(`❌ Puzzle ${live.id} for ${dateStr} is already published; refusing to replace it.`);
         process.exit(1);
       }
 
@@ -44,6 +43,7 @@ async function main() {
         console.log(`✅ Successfully generated & buffered puzzle: ${puzzle.id} (${puzzle.title})`);
       } else {
         console.error('❌ Failed to generate puzzle.');
+        process.exitCode = 1;
       }
       break;
     }
@@ -94,16 +94,22 @@ async function main() {
     }
 
     case 'buffer': {
-      const puzzles = await queryAll<{ id: string; date: string; title: string; status: string; created_at: string }>(
-        `SELECT id, date, title, status, created_at FROM puzzles WHERE status = 'buffered' ORDER BY date ASC;`
+      const puzzles = queryAll<{ id: string; date: string; title: string; approved_at: string | null }>(
+        `SELECT id, date, title, approved_at FROM puzzles WHERE status = 'buffered' ORDER BY date ASC;`
       );
 
       console.log(`\n=== BUFFERED PUZZLES (${puzzles.length}) ===`);
+      console.log(
+        isApprovalRequired()
+          ? 'REQUIRE_PUZZLE_APPROVAL is on: unapproved puzzles are replaced by a fallback puzzle on their date.'
+          : 'REQUIRE_PUZZLE_APPROVAL is off: buffered puzzles publish on their date whether or not they were approved.'
+      );
       if (puzzles.length === 0) {
         console.log('No puzzles currently in buffer.');
       } else {
         for (const p of puzzles) {
-          console.log(`• ID: ${p.id} | Date: ${p.date} | Title: "${p.title}"`);
+          const approval = p.approved_at ? `approved ${p.approved_at}` : 'not approved';
+          console.log(`• ID: ${p.id} | Date: ${p.date} | Title: "${p.title}" | ${approval}`);
         }
       }
       break;
@@ -115,8 +121,17 @@ async function main() {
         console.error('Usage: cli approve <puzzleId>');
         process.exit(1);
       }
-      await runQuery(`UPDATE puzzles SET status = 'published' WHERE id = ?;`, [id]);
-      console.log(`✅ Puzzle ${id} marked as published.`);
+      const puzzle = getPuzzleRowById(id);
+      if (!puzzle) {
+        console.error(`❌ No puzzle with ID ${id}. Run \`cli buffer\` to list buffered puzzles.`);
+        process.exit(1);
+      }
+      if (puzzle.status !== 'buffered') {
+        console.error(`❌ Puzzle ${id} is ${puzzle.status}; only buffered puzzles can be approved.`);
+        process.exit(1);
+      }
+      runQuery(`UPDATE puzzles SET approved_at = datetime('now') WHERE id = ?;`, [id]);
+      console.log(`✅ Puzzle ${id} approved. It will be published on ${puzzle.date}.`);
       break;
     }
 
@@ -126,8 +141,18 @@ async function main() {
         console.error('Usage: cli reject <puzzleId>');
         process.exit(1);
       }
-      await runQuery(`UPDATE puzzles SET status = 'archived' WHERE id = ?;`, [id]);
-      console.log(`🗑️ Puzzle ${id} rejected and archived.`);
+      const puzzle = getPuzzleRowById(id);
+      if (!puzzle) {
+        console.error(`❌ No puzzle with ID ${id}. Run \`cli buffer\` to list buffered puzzles.`);
+        process.exit(1);
+      }
+      if (puzzle.status !== 'buffered') {
+        // A published puzzle may already have players; swapping it mid-day would reset their attempts.
+        console.error(`❌ Puzzle ${id} is ${puzzle.status}; only buffered puzzles can be rejected.`);
+        process.exit(1);
+      }
+      runQuery(`UPDATE puzzles SET status = 'archived' WHERE id = ?;`, [id]);
+      console.log(`🗑️ Puzzle ${id} rejected. The server's next buffer check generates a replacement for ${puzzle.date}.`);
       break;
     }
 
@@ -138,12 +163,17 @@ Commands:
   generate [--date YYYY-MM-DD] [--theme "prompt"]  Generate a new puzzle
   preview [puzzleId] [--out preview.html]         Generate HTML preview
   buffer                                          List buffered puzzles
-  approve <puzzleId>                              Approve puzzle for publication
-  reject <puzzleId>                               Archive/reject puzzle
+  approve <puzzleId>                              Approve a buffered puzzle (required when REQUIRE_PUZZLE_APPROVAL=true)
+  reject <puzzleId>                               Reject a buffered puzzle so it's regenerated
 `);
   }
 }
 
+function escapeHtml(value: unknown): string {
+  return String(value ?? '').replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
+}
+
+// Titles, themes, and clues come from the LLM, so everything interpolated below is escaped.
 function generatePreviewHtml(p: any): string {
   const rows = p.solution.map((row: string[], r: number) => {
     const cells = row
@@ -155,7 +185,7 @@ function generatePreviewHtml(p: any): string {
           return `<td style="width:34px;height:34px;background:#111;border:1px solid #333;"></td>`;
         }
         return `<td style="width:34px;height:34px;position:relative;background:#fff;border:1px solid #444;text-align:center;font-weight:bold;font-size:16px;font-family:sans-serif;color:#000;">
-          ${num}${ch}
+          ${num}${escapeHtml(ch)}
         </td>`;
       })
       .join('');
@@ -163,18 +193,18 @@ function generatePreviewHtml(p: any): string {
   }).join('');
 
   const acrossClues = p.clues.across
-    .map((c: any) => `<li><strong>${c.number}.</strong> ${c.text} <em>[${c.answer}]</em></li>`)
+    .map((c: any) => `<li><strong>${escapeHtml(c.number)}.</strong> ${escapeHtml(c.text)} <em>[${escapeHtml(c.answer)}]</em></li>`)
     .join('');
 
   const downClues = p.clues.down
-    .map((c: any) => `<li><strong>${c.number}.</strong> ${c.text} <em>[${c.answer}]</em></li>`)
+    .map((c: any) => `<li><strong>${escapeHtml(c.number)}.</strong> ${escapeHtml(c.text)} <em>[${escapeHtml(c.answer)}]</em></li>`)
     .join('');
 
   return `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
-  <title>${p.title} - Preview</title>
+  <title>${escapeHtml(p.title)} - Preview</title>
   <style>
     body { font-family: system-ui, -apple-system, sans-serif; background: #23272a; color: #f2f3f5; padding: 24px; }
     .container { max-width: 1000px; margin: 0 auto; background: #2c2f33; padding: 24px; border-radius: 12px; }
@@ -186,8 +216,8 @@ function generatePreviewHtml(p: any): string {
 </head>
 <body>
   <div class="container">
-    <h1>${p.title}</h1>
-    <p><strong>Date:</strong> ${p.date} | <strong>Author:</strong> ${p.author} ${p.theme ? `| <strong>Theme:</strong> ${p.theme}` : ''}</p>
+    <h1>${escapeHtml(p.title)}</h1>
+    <p><strong>Date:</strong> ${escapeHtml(p.date)} | <strong>Author:</strong> ${escapeHtml(p.author)} ${p.theme ? `| <strong>Theme:</strong> ${escapeHtml(p.theme)}` : ''}</p>
     <table>${rows}</table>
     <div class="clues-grid">
       <div>

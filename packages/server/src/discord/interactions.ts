@@ -1,6 +1,8 @@
-import { formatTime } from '@crossword/shared';
+import { getPuzzleDate } from '@crossword/shared';
 import { Request, Response } from 'express';
-import { queryAll, runQuery } from '../db/database.js';
+import { runQuery } from '../db/database.js';
+import { getPuzzleRowByDate } from '../engine/puzzleStore.js';
+import { formatLeaderboardLines, getGuildLeaderboard } from '../leaderboard.js';
 import { verifyDiscordSignature } from './signature.js';
 
 export async function handleDiscordInteractions(req: Request, res: Response): Promise<void> {
@@ -36,7 +38,7 @@ export async function handleDiscordInteractions(req: Request, res: Response): Pr
     return;
   }
 
-  // Type 2: APPLICATION_COMMAND or Type 4: PRIMARY_ENTRY_POINT
+  // Type 2: APPLICATION_COMMAND (Entry Point commands arrive as type 2 too, with data.type 4)
   if (interaction.type === 2) {
     const { name, options } = interaction.data;
     const guildId = interaction.guild_id;
@@ -82,7 +84,7 @@ export async function handleDiscordInteractions(req: Request, res: Response): Pr
         }
       }
 
-      await runQuery(
+      runQuery(
         `INSERT INTO guild_config (guild_id, leaderboard_channel_id, announce_solves, updated_at)
          VALUES (?, ?, ?, datetime('now'))
          ON CONFLICT(guild_id) DO UPDATE SET
@@ -114,23 +116,11 @@ export async function handleDiscordInteractions(req: Request, res: Response): Pr
         return;
       }
 
-      const todayStr = new Date().toISOString().split('T')[0];
-      const rows = await queryAll<{
-        display_name: string;
-        username: string;
-        start_time: string;
-        finish_time: string;
-        penalty_seconds: number;
-      }>(
-        `SELECT p.display_name, p.username, a.start_time, a.finish_time, a.penalty_seconds
-         FROM attempts a
-         JOIN players p ON a.user_id = p.user_id
-         JOIN puzzles pz ON a.puzzle_id = pz.id
-         WHERE a.guild_id = ? AND pz.date = ? AND a.finish_time IS NOT NULL;`,
-        [guildId, todayStr]
-      );
+      const todayStr = getPuzzleDate();
+      const puzzle = getPuzzleRowByDate(todayStr);
+      const entries = puzzle ? getGuildLeaderboard(guildId, puzzle.id) : [];
 
-      if (rows.length === 0) {
+      if (entries.length === 0) {
         res.json({
           type: 4,
           data: {
@@ -141,37 +131,13 @@ export async function handleDiscordInteractions(req: Request, res: Response): Pr
         return;
       }
 
-      const entries = rows.map((r) => {
-        const elapsed = Math.floor(
-          (new Date(r.finish_time).getTime() - new Date(r.start_time).getTime()) / 1000
-        );
-        return {
-          displayName: r.display_name,
-          total: elapsed + r.penalty_seconds,
-          penalties: r.penalty_seconds,
-          finishTime: r.finish_time,
-        };
-      });
-
-      entries.sort((a, b) => {
-        if (a.total !== b.total) return a.total - b.total;
-        return new Date(a.finishTime).getTime() - new Date(b.finishTime).getTime();
-      });
-
-      const medals = ['🥇', '🥈', '🥉'];
-      const lines = entries.slice(0, 10).map((e, idx) => {
-        const medal = medals[idx] || `**#${idx + 1}**`;
-        const penaltyInfo = e.penalties > 0 ? ` (+${formatTime(e.penalties)} penalties)` : '';
-        return `${medal} **${e.displayName}** — \`${formatTime(e.total)}\`${penaltyInfo}`;
-      });
-
       res.json({
         type: 4,
         data: {
           embeds: [
             {
               title: `📊 Current Crossword Standings — ${todayStr}`,
-              description: lines.join('\n'),
+              description: formatLeaderboardLines(entries).join('\n'),
               color: 0x5865f2,
               footer: {
                 text: 'Leaderboard is spoiler-free • Standings update in real time',
@@ -191,8 +157,14 @@ export async function handleDiscordInteractions(req: Request, res: Response): Pr
       res.json({ type: 12 });
       return;
     }
+
+    res.json({
+      type: 4,
+      data: { content: `Unknown command: /${name}`, flags: 64 },
+    });
+    return;
   }
 
-  // Default handler
-  res.json({ type: 1 });
+  // PONG is only a valid answer to PING; anything else this app doesn't handle is rejected.
+  res.status(400).json({ error: `Unsupported interaction type ${interaction.type}` });
 }

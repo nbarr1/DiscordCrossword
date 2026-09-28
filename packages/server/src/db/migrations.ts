@@ -1,7 +1,7 @@
-import { getDatabase, persistDatabase, runQuery } from './database.js';
+import { getDatabase, queryAll, runQuery, transaction } from './database.js';
 
 export async function runMigrations(): Promise<void> {
-  const db = await getDatabase();
+  const db = getDatabase();
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS migrations (
@@ -10,14 +10,6 @@ export async function runMigrations(): Promise<void> {
       applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
   `);
-
-  const appliedMigrations = db.exec(`SELECT name FROM migrations;`);
-  const appliedSet = new Set<string>();
-  if (appliedMigrations.length > 0 && appliedMigrations[0].values) {
-    for (const row of appliedMigrations[0].values) {
-      appliedSet.add(row[0] as string);
-    }
-  }
 
   const migrations: { name: string; sql: string }[] = [
     {
@@ -92,15 +84,24 @@ export async function runMigrations(): Promise<void> {
         CREATE INDEX IF NOT EXISTS idx_events_attempt ON events(attempt_id);
       `,
     },
+    {
+      // Set by `cli approve`. With REQUIRE_PUZZLE_APPROVAL=true, only approved puzzles are published.
+      name: '002_puzzle_approval',
+      sql: `ALTER TABLE puzzles ADD COLUMN approved_at TEXT;`,
+    },
   ];
 
   for (const m of migrations) {
-    if (!appliedSet.has(m.name)) {
+    // Checked inside the transaction so the server and the CLI can't both apply the same migration.
+    const applied = transaction(() => {
+      const done = queryAll<{ name: string }>(`SELECT name FROM migrations WHERE name = ?;`, [m.name]);
+      if (done.length > 0) return false;
       db.exec(m.sql);
-      db.exec(`INSERT INTO migrations (name) VALUES ('${m.name}');`);
+      runQuery(`INSERT INTO migrations (name) VALUES (?);`, [m.name]);
+      return true;
+    });
+    if (applied) {
       console.log(`[Database] Applied migration: ${m.name}`);
     }
   }
-
-  persistDatabase();
 }
